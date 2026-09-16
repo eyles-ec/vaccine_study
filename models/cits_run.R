@@ -27,13 +27,15 @@ library(stringr)
 #also restricts data to the end of Bristol data in week 140 from intervention
 
 
-fit_cits_model <- function(df, outcome_var = "UptakePct",
+fit_cits_model <- function(df, 
+                           outcome_var = "IncidencePct",
+                           outcome_type = c("count", "rate"),
                            group_var = "group",
                            exposure_var = "Population",
                            groups_to_include = c("Somali", "White"),
                            reference_group = "White",
                            age_group = NULL, # with a NULL argument this is for all C1/C2/C3, you can call it with c("C1", "C2") to combine or "C1" for just one
-                           origin_date = as.Date("2022-04-01"),
+                           event_date = as.Date("2022-04-01"),
                            outbreaks = TRUE,
                            outbreaks_dates = "outbreaks_df",
                            robust_if_overdispersed = TRUE,
@@ -109,38 +111,58 @@ fit_cits_model <- function(df, outcome_var = "UptakePct",
     paste(outcome_var, "~", right_side)
   )
   
-  #fit initial Poisson model
-  poisson_model <- stats::glm(formula,
-                              family = stats::poisson(link = "log"),
-                              data = df_filtered)
   
-  #Pearson check for overdispersion 
-  dispersion <- sum(stats::residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
-  
-  #Switch to NB (or quasi) if needed
-  if (dispersion > 1.5 && robust_if_overdispersed) {
-    warning(sprintf("Overdispersion detected (dispersion = %.2f). Switching to %s model.",
-                    dispersion, fallback_family))
+  if (outcome_type == "count"){
+    #fit initial Poisson model
+    poisson_model <- stats::glm(formula,
+                                family = stats::poisson(link = "log"),
+                                data = df_filtered)
     
-    model <- switch(fallback_family,
-                    quasipoisson = stats::glm(formula,
-                                              family = stats::quasipoisson(link = "log"),
-                                              data = df_filtered),
-                    neg_binomial = MASS::glm.nb(formula, data = df_filtered),
-                    stop("Unsupported fallback_family. 'quasipoisson' or 'neg_binomial' only in function call."))
-  } else {
-    model <- poisson_model
+    #Pearson check for overdispersion 
+    dispersion <- sum(stats::residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
+    
+    #Switch to NB (or quasi) if needed
+    if (dispersion > 1.5 && robust_if_overdispersed) {
+      warning(sprintf("Overdispersion detected (dispersion = %.2f). Switching to %s model.",
+                      dispersion, fallback_family))
+      
+      model <- switch(fallback_family,
+                      quasipoisson = stats::glm(formula,
+                                                family = stats::quasipoisson(link = "log"),
+                                                data = df_filtered),
+                      neg_binomial = MASS::glm.nb(formula, data = df_filtered),
+                      stop("Unsupported fallback_family. 'quasipoisson' or 'neg_binomial' only in function call."))
+    } else {
+      model <- poisson_model
+    }
+  
+    #Add fitted values + pointwise CI for mean (link-scale SE)
+    pred <- stats::predict(model, type = "link", se.fit = TRUE)
+    df_filtered <- df_filtered %>%
+      dplyr::mutate(
+        yhat = exp(pred$fit),
+        yhat_lower = exp(pred$fit - 1.96 * pred$se.fit),
+        yhat_upper = exp(pred$fit + 1.96 * pred$se.fit)
+      )
   }
   
-  #Add fitted values + pointwise CI for mean (link-scale SE)
-  pred <- stats::predict(model, type = "link", se.fit = TRUE)
-  df_filtered <- df_filtered %>%
-    dplyr::mutate(
-      yhat = exp(pred$fit),
-      yhat_lower = exp(pred$fit - 1.96 * pred$se.fit),
-      yhat_upper = exp(pred$fit + 1.96 * pred$se.fit)
-    )
-  
+  if (outcome_type == "rate"){
+    
+    #if it's a percentage/rate then fit a gaussian model
+    model <- stats::glm(formula,
+                        family = stats::gaussian(),
+                        data = df_filtered)
+    
+        #add fitted values + pointwise CI for mean (response-scale SE)
+    pred <- stats::predict(model, type = "response", se.fit = TRUE)
+    df_filtered <- df_filtered %>%
+        dplyr::mutate(
+        yhat = pred$fit,
+        yhat_lower = pred$fit - 1.96 * pred$se.fit,
+        yhat_upper = pred$fit + 1.96 * pred$se.fit
+      )
+  }
+    
   if (display) {
     cat("\n--- Final Model Summary (", stats::family(model)$family, ") ---\n", sep = "")
     print(summary(model))
@@ -149,7 +171,7 @@ fit_cits_model <- function(df, outcome_var = "UptakePct",
   list(
     data = df_filtered,
     model = model,
-    dispersion = dispersion,
+   # dispersion = dispersion,
     family_used = stats::family(model)$family
   )
 }
