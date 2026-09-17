@@ -563,10 +563,35 @@ rm(vax)
 #add in intervention dates - this will be useful for when we make this into a loop
 event_dates <- tribble(
   ~group,                ~event_date,
-  "Somali",              as.Date("2022-04-01"),
-  "OtherMinority",       as.Date("2022-04-01"),
-  "WestonDeprived",      as.Date("2022-04-01")
+  "Somali",              as.Date("2023-04-01"),
+  "OtherMinority",       as.Date("2023-04-01"),
+  "WestonDeprived",      as.Date("2023-04-01")
 )
+
+#outbreaks dates
+
+#how to add in months in sequence, see below to append individual dates
+outbreak_dates <- c(
+  seq(
+    as.Date("2023-06-01"),
+    as.Date("2024-03-01"),
+    by = "month"
+  )
+)
+
+# outbreak_dates <- c(outbreak_dates, as.Date(c(
+#   "2023-06-01",
+#   "2023-07-01"
+# )
+#)
+#)
+
+
+#put the dates into vax_long
+vax_long <- vax_long |>
+  dplyr::mutate(
+    outbreak = as.integer(date %in% outbreak_dates)
+  )
 
 #missingness
 vax_long <- vax_long %>%
@@ -597,6 +622,7 @@ cf <- generate_counterfactual(
   model = cits$model,
   group_name  = "Somali",
   outcome_var =  "UptakePct",
+  outcome_type = "rate",
   time_var    = "time",
   group_var   = "group",
   period_var  = "period",
