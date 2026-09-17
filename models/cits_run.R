@@ -515,8 +515,6 @@ plot_cits <- function(cits_model,
   return(p)
 }
 
-
-
 #get working directory from paths.R
 setwd(wd)
 
@@ -564,12 +562,12 @@ vax_long <- vax_long %>%
 
 #fit model
 
-cits <- fit_cits_model(vax_long, outcome_var = "Vaccinations", age = "C1", outcome_type = "count", outbreaks = FALSE)
+cits <- fit_cits_model(vax_long, outcome_var = "UptakePct", age ="C1", outcome_type = "rate", outbreaks = FALSE)
 
 #take a peek
 
 ggplot(cits$data,
-       aes(Month, Vaccinations,
+       aes(Month, UptakePct,
            colour = group)) +
   geom_point() +
   geom_line(aes(y = yhat), linewidth = 1)
@@ -580,7 +578,7 @@ cf <- generate_counterfactual(
   df = cits$data,
   model = cits$model,
   group_name  = "Somali",
-  outcome_var =  "Vaccinations",
+  outcome_var =  "UptakePct",
   time_var    = "time",
   group_var   = "group",
   period_var  = "period",
