@@ -28,13 +28,13 @@ library(stringr)
 
 
 fit_cits_model <- function(df, 
-                           outcome_var = "IncidencePct",
+                           outcome_var = "Vaccinations",
                            outcome_type = c("count", "rate"),
                            group_var = "group",
                            exposure_var = "Population",
                            groups_to_include = c("Somali", "White"),
                            reference_group = "White",
-                           age_group = NULL, # with a NULL argument this is for all C1/C2/C3, you can call it with c("C1", "C2") to combine or "C1" for just one
+                           age = "C1",
                            event_date = as.Date("2022-04-01"),
                            outbreaks = TRUE,
                            outbreaks_dates = "outbreaks_df",
@@ -48,10 +48,7 @@ fit_cits_model <- function(df,
     dplyr::filter(
       .data[[group_var]] %in% groups_to_include
     ) %>%
-    dplyr::filter(
-      is.null(age_group) | .data$age_group %in% age_group
-    ) %>%
-    dplyr::mutate(
+   dplyr::mutate(
       !!group_var := factor(
         .data[[group_var]],
         levels = groups_to_include
@@ -72,6 +69,12 @@ fit_cits_model <- function(df,
       # post-intervention indicator
       period = as.integer(time >= 0),
      )
+  
+  #filter out by age group
+  if (!is.null(age)) {
+    df_filtered <- df_filtered %>%
+      filter(age_group %in% age)
+  }
   
     #add in outbreaks binary if outbreaks are selected
   if (outbreaks) {
@@ -541,6 +544,8 @@ pivot_longer(cols = -c(month_start, Month),
 
 rm(vax)
 
+
+
 #add in intervention dates 
 event_dates <- tribble(
   ~group,                ~event_date,
@@ -549,10 +554,11 @@ event_dates <- tribble(
   "WestonDeprived",      as.Date("2022-04-01")
 )
 
+cits2$data$yhat <- predict(cits$model, type = "response")
 
-#add in cits variables time and period
-
-time = as.integer(difftime(EventDate, as.Date("2022-04-25"), units = "weeks")),
-
-
+ggplot(cits2$data,
+       aes(Month, IncidencePct,
+           colour = group)) +
+  geom_point() +
+  geom_line(aes(y = yhat), linewidth = 1)
 
