@@ -36,7 +36,7 @@ fit_cits_model <- function(df,
                            age = "C1",
                            event_date = as.Date("2022-04-01"),
                            outbreaks = FALSE,
-                           outbreaks_dates = "outbreaks_df",
+                           outbreaks_dates = "outbreak_dates",
                            robust_if_overdispersed = TRUE,
                            fallback_family = "neg_binomial",
                            display = TRUE) {
@@ -77,12 +77,10 @@ fit_cits_model <- function(df,
   
     #add in outbreaks binary if outbreaks are selected
   if (outbreaks) {
-    
-    df_filtered <- df_filtered %>%
+   
+     df_filtered <- df_filtered %>%
       mutate(
-        outbreak = as.integer(
-          month_start %in% outbreaks_dates$month_start
-        )
+        outbreak = as.integer(month_start %in% outbreaks_dates)
       )
     
   } else {
@@ -579,19 +577,13 @@ outbreak_dates <- c(
   )
 )
 
+#commented out, but append individual months as such
 # outbreak_dates <- c(outbreak_dates, as.Date(c(
 #   "2023-06-01",
 #   "2023-07-01"
 # )
 #)
 #)
-
-
-#put the dates into vax_long
-vax_long <- vax_long |>
-  dplyr::mutate(
-    outbreak = as.integer(date %in% outbreak_dates)
-  )
 
 #missingness
 vax_long <- vax_long %>%
@@ -603,9 +595,11 @@ vax_long <- vax_long %>%
     )
   )
 
-#fit model
+#fit model. arguments are described in comments above the function
+#make sure you have the right outcome type. 
+#the outbreaks don't seem to add anything. i think maybe it's overparameterised? 
 
-cits <- fit_cits_model(vax_long, outcome_var = "UptakePct", age ="C1", outcome_type = "rate", outbreaks = FALSE)
+cits <- fit_cits_model(vax_long, outcome_var = "UptakePct", age ="C1", outcome_type = "rate", outbreaks = TRUE)
 
 #take a peek
 
@@ -632,3 +626,6 @@ cf <- generate_counterfactual(
 #create cf graph 
 
 p <- plot_cits(cf,save_plot = FALSE)
+
+p
+
