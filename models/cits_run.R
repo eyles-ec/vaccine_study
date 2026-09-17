@@ -35,7 +35,7 @@ fit_cits_model <- function(df,
                            reference_group = "White",
                            age = "C1",
                            event_date = as.Date("2022-04-01"),
-                           outbreaks = TRUE,
+                           outbreaks = FALSE,
                            outbreaks_dates = "outbreaks_df",
                            robust_if_overdispersed = TRUE,
                            fallback_family = "neg_binomial",
@@ -186,6 +186,7 @@ fit_cits_model <- function(df,
 #because of autocorrelation we use Newey-West calculation for SE/CIs, nw_lag sets the lag for the calculation (in months)
 
 generate_counterfactual <- function(df, model,
+                                    outcome_type = c("count", "rate"),
                                     group_name  = "Somali",
                                     outcome_var = "IncidencePct",
                                     time_var    = "time",
@@ -202,6 +203,7 @@ generate_counterfactual <- function(df, model,
     stop("generate_counterfactual(): df is missing column(s): ",
          paste(missing_cols, collapse = ", "))
   }
+  outcome_type <- match.arg(outcome_type)
   
   #calculate constant for CIs 
   alpha <- 1 - level
@@ -321,11 +323,17 @@ generate_counterfactual <- function(df, model,
   #exponentiated due to model output
   #again, CF is what would group have looked like post-intervention if intervention hadn't happened,
   #but the common post effect, monthly dummies, and baseline trends still happened (e.g. other group)
-  eta_hat_post <- as.numeric(X %*% beta) + offset_vec #linear predictor from model
-  yhat_post    <- exp(eta_hat_post) 
+  #offset_vec should be all 0s if it's a gaussian model so don't need to do anything fancy
+  eta_hat_post <- as.numeric(X %*% beta) + offset_vec
+  eta_cf_post  <- as.numeric(X_cf %*% beta) + offset_vec
   
-  eta_cf_post <- as.numeric(X_cf %*% beta) + offset_vec #counterfactual linear predictor
-  cf_post     <- exp(eta_cf_post)
+  if (outcome_type == "count") {
+    yhat_post <- exp(eta_hat_post)
+    cf_post   <- exp(eta_cf_post)
+  } else {
+    yhat_post <- eta_hat_post
+    cf_post   <- eta_cf_post
+  }
   
   y_obs      <- post[[outcome_var]] #extract observed counts
   weeks_post <- nrow(post) #used for calculating annualised/weekly differences
@@ -348,8 +356,18 @@ generate_counterfactual <- function(df, model,
   
   #use delta method to calculate slopes with matrix crossproducts
   #for reference https://doi.org/10.1111/1475-6773.12122
-  g_cf   <- as.numeric(crossprod(X_cf, cf_post))    # d sum(cf) / d beta
-  g_pred <- as.numeric(crossprod(X,    yhat_post))  # d sum(pred) / d beta
+  
+  if (outcome_type == "count") {
+    #poisson/nb
+    g_cf   <- as.numeric(crossprod(X_cf, cf_post))  # d sum(cf) / d beta
+    g_pred <- as.numeric(crossprod(X, yhat_post))# d sum(pred) / d beta
+    
+  } else {
+    #gaussian/rate
+    g_cf   <- colSums(X_cf)
+    g_pred <- colSums(X)
+    
+  }
   
   #use the crossproducts to calculate standard errors 
   se_total_cf   <- sqrt(drop(t(g_cf)   %*% V2 %*% g_cf))
@@ -542,7 +560,7 @@ pivot_longer(cols = -c(month_start, Month),
 
 rm(vax)
 
-#add in intervention dates 
+#add in intervention dates - this will be useful for when we make this into a loop
 event_dates <- tribble(
   ~group,                ~event_date,
   "Somali",              as.Date("2022-04-01"),
