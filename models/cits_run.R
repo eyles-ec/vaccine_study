@@ -8,24 +8,23 @@ library(tidyr)
 library(stringr)
 
 
-#function to fit CITS models, with a 6 week 'burn in period' that can be changed as we have data back to -59.5
-#the 0 in the time variable in this case is the CAB intervention date in April 2022, represented in time_var
-#time_cutoff thus is giving us the burn in period
+#function to fit CITS models, adapted from 
+#https://github.com/eyles-ec/common-ambition 
 #outcome_var can be changed to which outcome you like, default is hiv test count
-#group_var is the grouping of location and ACHC
-#exposure_var is the population of the specific group selected, calculated in the collapse code
-#groups_to_include are which comparison you're making with group_var, default is Bristol ACHC v Bristol non ACHC
-#reference_group allows you to set the ref group for the model pf above
+#outcome_type can be adjusted to count or rate, which does poisson/NB in the first case or gaussian in the second
+#group_var is the name of the group variable
+#exposure_var is the population of the specific group selected
+#groups_to_include are which comparison you're making with group_var, default is Somali v White
+#reference_group allows you to set the ref group for the model of above
+#event_date is the intervention date
+#outbreaks = TRUE and outbreaks_dates are an optional variable to include dates of flu outbreaks, but the data are monthly
 #robust_if_overdispersed allows the function to try negative binomial by default (but there's also an option for quasipoisson)
+#fallback family can be set to quasipoisson if desired
+
 #saves the model output, dispersion, family used, and predicted values for use in the counterfactual in a list
 #also prints the final selected model if display = TRUE (by default)
 
-#due to the additional data, i have added a time_since_intervention term to the models
-#this can tell us effectively the weekly % increase relative to the comparison group
-#make sure to exponentiate the coefficient to interpret it 
-
-#also restricts data to the end of Bristol data in week 140 from intervention
-
+#calculates time and period, dynamically constructs the model formula based on what needs to be included. 
 
 fit_cits_model <- function(df, 
                            outcome_var = "Vaccinations",
@@ -180,20 +179,20 @@ fit_cits_model <- function(df,
 }
 
 
-#function to generate the counterfactual (if there was no CAB)
+#function to generate the counterfactual (if there was no intervention)
 #needs the dataframe and model from CITS function above
 #we generate this, then append it on the list output from the CITS function for the rest of the pipeline
 #also possible to look at the counterfactual summary with the summary option on (by default, or off (summary =FALSE))
-#because of autocorrelation we use Newey-West calculation for SE/CIs, nw_lag sets the lag for the calcualtion (in weeks)
+#because of autocorrelation we use Newey-West calculation for SE/CIs, nw_lag sets the lag for the calculation (in months)
 
 generate_counterfactual <- function(df, model,
-                                    group_name  = "Bristol ACHC",
-                                    outcome_var = "hiv_test",
+                                    group_name  = "Somali",
+                                    outcome_var = "IncidencePct",
                                     time_var    = "time",
-                                    group_var   = "group_bristol",
+                                    group_var   = "group",
                                     period_var  = "period",
                                     level       = 0.95,
-                                    nw_lag    = 4,
+                                    nw_lag    = 3,
                                     summary = TRUE) {
   
   #check arguments and columns since we are doing multiple outcomes/comparisons
@@ -219,7 +218,7 @@ generate_counterfactual <- function(df, model,
   df2 <- df |>
     dplyr::mutate(.row_id = dplyr::row_number())
   
-  #Post-period rows for Bristol ACHC
+  #Post-period rows for Somali/Weston Deprived/Etc 
   post <- df2 |>
     dplyr::filter(.data[[group_var]] == group_name,
                   .data[[period_var]] == 1)
@@ -246,11 +245,11 @@ generate_counterfactual <- function(df, model,
   X  <- stats::model.matrix(tt, post) #design matrix
   
   #Generate counterfactual matrix, e.g. 
-  #What would Bristol ACHC look like post-CAB if they followed the same post change
-  #as the other group + common effects, without the Bristol ACHC specific trend
+  #What would group of interest look like post-intervention if they followed the same post change
+  #as the other group + common effects, without the group specific trend
   # Keep post-period rows, but remove the treated group's post differential:
-  # 1) Bristol ACHC group level change in post: group:period
-  # 2) Bristol ACHC group slope change in post: time:group:period
+  # 1) group level change in post: group:period
+  # 2) group slope change in post: time:group:period
   X_cf <- X
   
   #collect field names
@@ -272,7 +271,7 @@ generate_counterfactual <- function(df, model,
     )
   }
   
-  #remove Bristol ACHC trend from counterfactual model matrix
+  #remove group trend from counterfactual model matrix
   X_cf[, cols_to_zero] <- 0
   
   #generate variance-covariance matrix using Newey West technique,
@@ -320,7 +319,7 @@ generate_counterfactual <- function(df, model,
   
   #including the offset, calculate the mean and counterfacual mean
   #exponentiated due to model output
-  #again, CF is what would Bristol ACHC have looked like post-CAB if CAB hadn't happened,
+  #again, CF is what would group have looked like post-intervention if intervention hadn't happened,
   #but the common post effect, monthly dummies, and baseline trends still happened (e.g. other group)
   eta_hat_post <- as.numeric(X %*% beta) + offset_vec #linear predictor from model
   yhat_post    <- exp(eta_hat_post) 
@@ -461,12 +460,13 @@ generate_counterfactual <- function(df, model,
 #height and width are in inches by default 
 
 plot_cits <- function(cits_model,
-                      outcome_var = "hiv_test",        # NEW: outcome column
-                      outcome_label = "HIV tests",     # NEW: label for plot
-                      group_var = "group_bristol",
-                      groups_to_include = c("Bristol ACHC", "Bristol non ACHC"),
+                      outcome_var = "Vaccinations",       
+                      outcome_label = "Vaccinations (count)",    
+                      group_var = "group",
+                      groups_to_include = c("Somali", "White"),
+                      main_group = "Somali",
                       save_plot = FALSE,
-                      filename = "./subdirectory/plots/cits_plot.png",
+                      filename = "./plots/cits_plot.png",
                       overwrite = FALSE,
                       width = 10,
                       height = 6,
@@ -479,9 +479,9 @@ plot_cits <- function(cits_model,
     mutate(group = .data[[group_var]]) %>%
     filter(group %in% groups_to_include)
   
-  # Counterfactual line only for Bristol ACHC
+  # Counterfactual line only for main group
   cf_data <- df_plot %>%
-    filter(group == "Bristol ACHC", !is.na(cf))
+    filter(group == main_group, !is.na(cf))
   
   # Build plot
   p <- ggplot(df_plot, aes(x = time, y = .data[[outcome_var]], color = group)) +
@@ -494,8 +494,8 @@ plot_cits <- function(cits_model,
     geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
     labs(
       #title = paste("Observed vs Predicted", outcome_label, "Over Time"),
-      #subtitle = "Dashed line = CAB interventions (Week of April 25, 2022)\nDotted line = counterfactual prediction for Bristol ACHC",
-      x = "Weeks Since Intervention",
+      #subtitle = "Dashed line = Interventions (Month of April 1, 2022)\nDotted line = counterfactual prediction for Bristol ACHC",
+      x = "Months Since Intervention",
       y = paste0(outcome_label, " (count)"),
       color = "Group",
       fill = "Group"
@@ -544,8 +544,6 @@ pivot_longer(cols = -c(month_start, Month),
 
 rm(vax)
 
-
-
 #add in intervention dates 
 event_dates <- tribble(
   ~group,                ~event_date,
@@ -554,11 +552,41 @@ event_dates <- tribble(
   "WestonDeprived",      as.Date("2022-04-01")
 )
 
-cits2$data$yhat <- predict(cits$model, type = "response")
+#missingness
+vax_long <- vax_long %>%
+  mutate(
+    Vaccinations = ifelse(
+      is.na(Vaccinations),
+      round(UptakePct * Population / 100),
+      Vaccinations
+    )
+  )
 
-ggplot(cits2$data,
-       aes(Month, IncidencePct,
+#fit model
+
+cits <- fit_cits_model(vax_long, outcome_var = "Vaccinations", age = "C1", outcome_type = "count", outbreaks = FALSE)
+
+#take a peek
+
+ggplot(cits$data,
+       aes(Month, Vaccinations,
            colour = group)) +
   geom_point() +
   geom_line(aes(y = yhat), linewidth = 1)
 
+#generate cf, no need to filter by age group as if using the cits object and data it is the filtered version used for the model
+
+cf <- generate_counterfactual(
+  df = cits$data,
+  model = cits$model,
+  group_name  = "Somali",
+  outcome_var =  "Vaccinations",
+  time_var    = "time",
+  group_var   = "group",
+  period_var  = "period",
+  summary = TRUE
+)
+
+#create cf graph 
+
+p <- plot_cits(cf,save_plot = FALSE)
