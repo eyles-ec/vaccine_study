@@ -480,7 +480,7 @@ plot_cits <- function(cits_model,
                       outcome_label = "Vaccinations (count)",    
                       group_var = "group",
                       groups_to_include = c("Somali", "White"),
-                      main_group = "Somali",
+                      group_name = "Somali",
                       save_plot = FALSE,
                       filename = "./plots/cits_plot.png",
                       overwrite = FALSE,
@@ -497,7 +497,7 @@ plot_cits <- function(cits_model,
   
   # Counterfactual line only for main group
   cf_data <- df_plot %>%
-    filter(group == main_group, !is.na(cf))
+    filter(group == group_name, !is.na(cf))
   
   # Build plot
   p <- ggplot(df_plot, aes(x = time, y = .data[[outcome_var]], color = group)) +
@@ -559,6 +559,7 @@ pivot_longer(cols = -c(month_start, Month),
 rm(vax)
 
 #add in intervention dates - this will be useful for when we make this into a loop
+#these get modified later on
 event_dates <- tribble(
   ~group,                ~event_date,
   "Somali",              as.Date("2023-04-01"),
@@ -599,7 +600,7 @@ vax_long <- vax_long %>%
 #make sure you have the right outcome type. 
 #the outbreaks don't seem to add anything. i think maybe it's overparameterised? 
 
-cits <- fit_cits_model(vax_long, outcome_var = "UptakePct", age ="C1", outcome_type = "rate", outbreaks = TRUE)
+cits <- fit_cits_model(vax_long, outcome_var = "UptakePct", age ="C1", outcome_type = "rate", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), reference_group = "NonWestonDeprived", outbreaks = TRUE)
 
 #take a peek
 
@@ -614,7 +615,7 @@ ggplot(cits$data,
 cf <- generate_counterfactual(
   df = cits$data,
   model = cits$model,
-  group_name  = "Somali",
+  group_name  = "WestonDeprived",
   outcome_var =  "UptakePct",
   outcome_type = "rate",
   time_var    = "time",
@@ -625,7 +626,7 @@ cf <- generate_counterfactual(
 
 #create cf graph 
 
-p <- plot_cits(cf,save_plot = FALSE)
+p <- plot_cits(cf, outcome_var = "UptakePct", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), group_name = "WestonDeprived", save_plot = FALSE)
 
 p
 
