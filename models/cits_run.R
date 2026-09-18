@@ -6,7 +6,7 @@ library(readxl)
 library(dplyr)
 library(tidyr)
 library(stringr)
-
+library(pscl)
 
 #function to fit CITS models, adapted from 
 #https://github.com/eyles-ec/common-ambition 
@@ -531,6 +531,93 @@ plot_cits <- function(cits_model,
   return(p)
 }
 
+#check zero percentage to move on to hurdle model or not
+#sets a threshold to say whether it should be modelled with a zero inflation hurdle or not
+check_zeroes <- function(df,
+                        outcome_var = "Vaccinations",
+                        threshold = 25) {
+  
+  df %>%
+    group_by(age_group, group) %>%
+    summarise(
+      zeros = sum(.data[[outcome_var]] == 0, na.rm = TRUE),
+      n = n(),
+      pct_zero = 100 * zeros / n,
+      hurdle_candidate = pct_zero >= threshold,
+      .groups = "drop"
+    )
+  
+}
+
+
+fit_hurdle_model <- function(
+    cits_output,
+    outcome_var = "Vaccinations",
+    group_var = "group",
+    reference_group = "White",
+    exposure_var = "Population",
+    outbreaks = TRUE,
+    display = TRUE
+) {
+  
+  df <- cits_output$data
+
+    #error catch - wrong model family
+  if (cits_output$family_used == "gaussian") {
+    stop("Hurdle models are for the count models.")
+  }
+  
+  #error catch - wrong reference group
+  if (reference_group %in% levels(factor(df[[group_var]]))){
+   stop("Wrong reference gruop specified") 
+  }
+  
+  #ensure reference group is properly specified for modelling
+  df <- cits_output$data %>%
+    mutate(
+      !!group_var := factor(.data[[group_var]]),
+      !!group_var := relevel(
+        .data[[group_var]],
+        ref = reference_group
+      )
+    )
+  
+  right_side <- paste0(
+    "time * ", group_var, " * period"
+  )
+  
+  if (outbreaks && "outbreak" %in% names(df)) {
+    right_side <- paste(right_side, "+ outbreak")
+  }
+  
+  right_side <- paste0(
+    right_side,
+    " + offset(log(", exposure_var, "))"
+  )
+  
+  formula <- stats::as.formula(
+    paste(outcome_var, "~", right_side)
+  )
+  
+  model <- pscl::hurdle(
+    formula,
+    data = df,
+    dist = "negbin",
+    zero.dist = "binomial"
+  )
+  
+  if (display) {
+    print(summary(model))
+  }
+  
+  list(
+    data = df,
+    model = model
+  )
+  
+}
+
+
 #get working directory from paths.R
 setwd(wd)
 
@@ -628,5 +715,9 @@ cf <- generate_counterfactual(
 
 p <- plot_cits(cf, outcome_var = "UptakePct", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), group_name = "WestonDeprived", save_plot = FALSE)
 
-p
+#check zero percentages
+
+zero_summary <- check_zeroes(vax_long)
+
+#run selected comparisons as hurdle models
 
