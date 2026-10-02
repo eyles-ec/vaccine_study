@@ -568,8 +568,8 @@ fit_hurdle_model <- function(
   }
   
   #error catch - wrong reference group
-  if (reference_group %in% levels(factor(df[[group_var]]))){
-   stop("Wrong reference gruop specified") 
+  if (!reference_group %in% levels(factor(df[[group_var]]))){
+   stop("Wrong reference group specified") 
   }
   
   #ensure reference group is properly specified for modelling
@@ -687,12 +687,18 @@ vax_long <- vax_long %>%
 #make sure you have the right outcome type. 
 #the outbreaks don't seem to add anything. i think maybe it's overparameterised? 
 
-cits <- fit_cits_model(vax_long, outcome_var = "UptakePct", age ="C1", outcome_type = "rate", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), reference_group = "NonWestonDeprived", outbreaks = TRUE)
+cits <- fit_cits_model(vax_long, 
+                       outcome_var = "Vaccinations", 
+                       age ="C1", 
+                       outcome_type = "count", 
+                       groups_to_include = c("Somali", "White"), 
+                       reference_group = "White", 
+                       outbreaks = TRUE)
 
 #take a peek
 
 ggplot(cits$data,
-       aes(Month, UptakePct,
+       aes(Month, Vaccinations,
            colour = group)) +
   geom_point() +
   geom_line(aes(y = yhat), linewidth = 1)
@@ -702,9 +708,9 @@ ggplot(cits$data,
 cf <- generate_counterfactual(
   df = cits$data,
   model = cits$model,
-  group_name  = "WestonDeprived",
-  outcome_var =  "UptakePct",
-  outcome_type = "rate",
+  group_name  = "Somali",
+  outcome_var =  "Vaccinations",
+  outcome_type = "count",
   time_var    = "time",
   group_var   = "group",
   period_var  = "period",
@@ -713,11 +719,24 @@ cf <- generate_counterfactual(
 
 #create cf graph 
 
-p <- plot_cits(cf, outcome_var = "UptakePct", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), group_name = "WestonDeprived", save_plot = FALSE)
+p <- plot_cits(cf, outcome_var = "Vaccinations", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), group_name = "WestonDeprived", save_plot = FALSE)
 
 #check zero percentages
 
 zero_summary <- check_zeroes(vax_long)
 
 #run selected comparisons as hurdle models
+#for this we use the cits output data which means no need to subset
+hurdle <- fit_hurdle_model(
+  cits_output = cits,
+  outcome_var = "Vaccinations",
+  group_var = "group",
+  reference_group = "White",
+  exposure_var = "Population",
+  outbreaks = TRUE,
+  display = TRUE
+)
 
+#issue with hurdle models as the 0 separation is complete by groups
+#the pscl implementation struggles to do this, the next step may be 
+#to implement the steps ourselves? 
