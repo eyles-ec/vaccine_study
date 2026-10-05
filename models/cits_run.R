@@ -36,7 +36,7 @@ fit_cits_model <- function(df,
                            age = "C1",
                            event_date = as.Date("2024-03-01"),
                            outbreaks = FALSE,
-                           outbreaks_dates = "outbreak_dates",
+                           outbreaks_dates = outbreak_dates,
                            robust_if_overdispersed = TRUE,
                            fallback_family = "neg_binomial",
                            display = TRUE) {
@@ -84,7 +84,7 @@ fit_cits_model <- function(df,
    
     if (age == "C1") {
       
-      outbreak_start <- min(outbreaks_dates)
+      outbreak_start <- min(outbreaks_date)
       
       df_filtered <- df_filtered %>%
         mutate(
@@ -663,6 +663,7 @@ setwd(wd)
 #read in data, fix dates
 vax <- read_excel("Maindata_13_08_26.xlsx", sheet = "BNSSG_Monthly")
 vax$Month <- as.Date(as.character(vax$Month))
+vax$month_start <- as.Date(vax$month_start)
 
 #reshape to long format for modelling
 #change to NAs to coerce numeric
@@ -698,8 +699,8 @@ event_dates <- tribble(
 #how to add in months in sequence, see below to append individual dates
 outbreak_dates <- c(
   seq(
-    as.Date("2023-06-01"),
-    as.Date("2024-03-01"),
+    as.Date("2023-09-01"),
+    as.Date("2024-04-01"),
     by = "month"
   )
 )
@@ -735,9 +736,19 @@ cits <- fit_cits_model(vax_long,
                        outbreaks = FALSE,
                        robust_if_overdispersed = FALSE)
 
+
+cits2 <-  fit_cits_model(vax_long, 
+                         outcome_var = "Vaccinations", 
+                         age ="C2", 
+                         outcome_type = "count", 
+                         groups_to_include = c("White", "Somali"), 
+                         reference_group = "White", 
+                         outbreaks = TRUE,
+                         robust_if_overdispersed = FALSE)
+
 #take a peek
 
-ggplot(cits$data,
+ggplot(cits2$data,
        aes(Month, Vaccinations,
            colour = group)) +
   geom_point() +
