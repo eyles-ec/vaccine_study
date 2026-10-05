@@ -34,7 +34,7 @@ fit_cits_model <- function(df,
                            groups_to_include = c("Somali", "White"),
                            reference_group = "White",
                            age = "C1",
-                           event_date = as.Date("2022-04-01"),
+                           event_date = as.Date("2024-03-01"),
                            outbreaks = FALSE,
                            outbreaks_dates = "outbreak_dates",
                            robust_if_overdispersed = TRUE,
@@ -65,8 +65,12 @@ fit_cits_model <- function(df,
           lubridate::month(month_start) - lubridate::month(event_date)
         ),
       
+      # months post intervention
+      
+      time_post = pmax(time, 0),
+      
       # post-intervention indicator
-      period = as.integer(time >= 0),
+      period = as.integer(time >= 0)
      )
   
   #filter out by age group
@@ -78,10 +82,24 @@ fit_cits_model <- function(df,
     #add in outbreaks binary if outbreaks are selected
   if (outbreaks) {
    
-     df_filtered <- df_filtered %>%
-      mutate(
-        outbreak = as.integer(month_start %in% outbreaks_dates)
-      )
+    if (age == "C1") {
+      
+      outbreak_start <- min(outbreaks_dates)
+      
+      df_filtered <- df_filtered %>%
+        mutate(
+          outbreak = as.integer(month_start >= outbreak_start)
+        )
+      
+    
+    } else {
+      
+      df_filtered <- df_filtered %>%
+        mutate(
+          outbreak = as.integer(month_start %in% outbreaks_dates)
+        )
+    }
+  
     
   } else {
     
@@ -90,27 +108,48 @@ fit_cits_model <- function(df,
     
   }
   
-  # CITS mean model + month fixed effects, formula construction
-  
+  # CITS formula construction, with separations for age and outcome type
   #right side first
-  right_side <- paste0(
-    "time * ", group_var, " * period"
-  )
+  if (age == "C1") {
+    #group + time + period + time_after + group x time + group x period + group x time_post
+    
+    right_side <- paste0(
+      group_var, "* (time + period + time_post)"
+    )
+    
+    if (outbreaks) {
+      right_side <- paste0(right_side, "+ outbreak")
+    }
+    
   
-  if (outbreaks) {
-    right_side <- paste(right_side, "+ outbreak")
+   
+  } else {
+    #group + time + outbreak (pulse) + group x time + group x outbreak (pulse)
+      
+    right_side <- paste0(
+      group_var, " * time"
+    )
+    
+    if (outbreaks) {
+      right_side <- paste0(
+        group_var, " * (time + outbreak)"
+      )
+    }
   }
-  
+
   if (outcome_var == "Vaccinations"){
   right_side <- paste0(
     right_side,
     " + offset(log(", exposure_var, "))"
   )
   }
+
   formula <- stats::as.formula(
     paste(outcome_var, "~", right_side)
   )
   
+  cat("\nFormula being fitted:\n")
+  print(formula)
   
   if (outcome_type == "count"){
     #fit initial Poisson model
@@ -693,7 +732,8 @@ cits <- fit_cits_model(vax_long,
                        outcome_type = "count", 
                        groups_to_include = c("Somali", "White"), 
                        reference_group = "White", 
-                       outbreaks = TRUE)
+                       outbreaks = FALSE,
+                       robust_if_overdispersed = FALSE)
 
 #take a peek
 
@@ -701,7 +741,9 @@ ggplot(cits$data,
        aes(Month, Vaccinations,
            colour = group)) +
   geom_point() +
-  geom_line(aes(y = yhat), linewidth = 1)
+  geom_line(aes(y = yhat), linewidth = 1) +
+  facet_wrap(~group,
+             scales = "free_y")
 
 #generate cf, no need to filter by age group as if using the cits object and data it is the filtered version used for the model
 
