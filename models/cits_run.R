@@ -160,6 +160,8 @@ fit_cits_model <- function(df,
     #Pearson check for overdispersion 
     dispersion <- sum(stats::residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
     
+    print(dispersion)
+    
     #Switch to NB (or quasi) if needed
     if (dispersion > 1.5 && robust_if_overdispersed) {
       warning(sprintf("Overdispersion detected (dispersion = %.2f). Switching to %s model.",
@@ -210,7 +212,7 @@ fit_cits_model <- function(df,
   list(
     data = df_filtered,
     model = model,
-   # dispersion = dispersion,
+    dispersion = dispersion,
     family_used = stats::family(model)$family
   )
 }
@@ -731,24 +733,24 @@ cits <- fit_cits_model(vax_long,
                        outcome_var = "Vaccinations", 
                        age ="C1", 
                        outcome_type = "count", 
-                       groups_to_include = c("Somali", "White"), 
-                       reference_group = "White", 
+                       groups_to_include = c("WestonDeprived", "NonWestonDeprived"), 
+                       reference_group = "NonWestonDeprived", 
                        outbreaks = FALSE,
                        robust_if_overdispersed = FALSE)
 
 
 cits2 <-  fit_cits_model(vax_long, 
                          outcome_var = "Vaccinations", 
-                         age ="C2", 
+                         age ="C3", 
                          outcome_type = "count", 
                          groups_to_include = c("White", "Somali"), 
                          reference_group = "White", 
                          outbreaks = TRUE,
-                         robust_if_overdispersed = FALSE)
+                         robust_if_overdispersed = TRUE)
 
 #take a peek
 
-ggplot(cits2$data,
+ggplot(cits$data,
        aes(Month, Vaccinations,
            colour = group)) +
   geom_point() +
