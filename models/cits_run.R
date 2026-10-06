@@ -696,6 +696,7 @@ coef_output <- purrr::map2_dfr(
         event_date = model_specs$event_date[.y],
         outbreaks = model_specs$outbreaks[.y],
         dispersion = .x$dispersion,
+        aic = .x$model$aic,
         model_family = .x$family_used,
         formula = as.character(paste(deparse(formula(.x$model)), collapse = ""))
       )
