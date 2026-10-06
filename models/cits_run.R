@@ -6,7 +6,6 @@ library(readxl)
 library(dplyr)
 library(tidyr)
 library(stringr)
-library(pscl)
 
 #function to fit CITS models, adapted from 
 #https://github.com/eyles-ec/common-ambition 
@@ -151,6 +150,10 @@ fit_cits_model <- function(df,
   cat("\nFormula being fitted:\n")
   print(formula)
   
+  cat("\nComparison and cohort:\n")
+  print(paste0(groups_to_include, " ", age))
+  
+  
   if (outcome_type == "count"){
     #fit initial Poisson model
     poisson_model <- stats::glm(formula,
@@ -160,6 +163,7 @@ fit_cits_model <- function(df,
     #Pearson check for overdispersion 
     dispersion <- sum(stats::residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
     
+    cat("\nDispersion:\n")
     print(dispersion)
     
     #Switch to NB (or quasi) if needed
@@ -733,8 +737,8 @@ cits <- fit_cits_model(vax_long,
                        outcome_var = "Vaccinations", 
                        age ="C1", 
                        outcome_type = "count", 
-                       groups_to_include = c("WestonDeprived", "NonWestonDeprived"), 
-                       reference_group = "NonWestonDeprived", 
+                       groups_to_include = c("Somali", "White"), 
+                       reference_group = "White", 
                        outbreaks = FALSE,
                        robust_if_overdispersed = FALSE)
 
