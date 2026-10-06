@@ -607,14 +607,6 @@ pivot_longer(cols = -c(month_start, Month),
 
 rm(vax)
 
-#add in intervention dates - this will be useful for when we make this into a loop
-#these get modified later on
-event_dates <- tribble(
-  ~group,                ~event_date,
-  "Somali",              as.Date("2023-06-01"),
-  "WestonDeprived",      as.Date("2023-06-01")
-)
-
 #outbreaks dates
 
 #how to add in months in sequence, see below to append individual dates
@@ -644,56 +636,81 @@ vax_long <- vax_long %>%
     )
   )
 
-#fit model. arguments are described in comments above the function
-#make sure you have the right outcome type. 
-#the outbreaks don't seem to add anything. i think maybe it's overparameterised? 
-
-cits <- fit_cits_model(vax_long, 
-                       outcome_var = "Vaccinations", 
-                       age ="C1", 
-                       outcome_type = "count", 
-                       groups_to_include = c("Somali", "White"), 
-                       reference_group = "White", 
-                       outbreaks = FALSE,
-                       robust_if_overdispersed = FALSE)
-
-
-cits2 <-  fit_cits_model(vax_long, 
-                         outcome_var = "Vaccinations", 
-                         age ="C3", 
-                         outcome_type = "count", 
-                         groups_to_include = c("White", "Somali"), 
-                         reference_group = "White", 
-                         outbreaks = TRUE,
-                         robust_if_overdispersed = TRUE)
-
-#take a peek
-
-ggplot(cits$data,
-       aes(Month, Vaccinations,
-           colour = group)) +
-  geom_point() +
-  geom_line(aes(y = yhat), linewidth = 1) +
-  facet_wrap(~group,
-             scales = "free_y")
-
-#generate cf, no need to filter by age group as if using the cits object and data it is the filtered version used for the model
-
-cf <- generate_counterfactual(
-  df = cits$data,
-  model = cits$model,
-  group_name  = "Somali",
-  outcome_var =  "Vaccinations",
-  outcome_type = "count",
-  time_var    = "time",
-  group_var   = "group",
-  period_var  = "period",
-  summary = TRUE
+#set model specifications to run the model function with purrr (pmap)
+model_specs <- tibble::tribble(
+  ~age, ~groups_to_include, ~reference_group, ~outbreaks, ~event_date,
+  "C1", c("Somali", "White"), "White", FALSE, as.Date("2023-06-01"),
+  "C2", c("Somali", "White"), "White", TRUE,  as.Date("2023-06-01"),
+  "C3", c("Somali", "White"), "White", TRUE,  as.Date("2023-06-01"),
+  "C1", c("WestonDeprived", "NonWestonDeprived"), "NonWestonDeprived", FALSE, as.Date("2023-06-01"),
+  "C2", c("WestonDeprived", "NonWestonDeprived"), "NonWestonDeprived", TRUE,  as.Date("2023-06-01"),
+  "C3", c("WestonDeprived", "NonWestonDeprived"), "NonWestonDeprived", TRUE,  as.Date("2023-06-01")
 )
 
-#create cf graph 
+model_output <- pmap(
+  model_specs,
+  function(age,
+           groups_to_include,
+           reference_group,
+           outbreaks,
+           event_date){
+    
+    fit_cits_model(
+      df = vax_long,
+      outcome_var = "Vaccinations",
+      outcome_type = "count",
+      group_var = "group",
+      exposure_var = "Population",
+      groups_to_include = groups_to_include,
+      reference_group = reference_group,
+      age = age,
+      event_date = event_date,
+      outbreaks = outbreaks,
+      outbreaks_dates = outbreak_dates,
+      robust_if_overdispersed = FALSE,
+      fallback_family = "neg_binomial",
+      display = FALSE
+    )
+    
+  }
+)
 
-p <- plot_cits(cf, outcome_var = "Vaccinations", groups_to_include = c("WestonDeprived", "NonWestonDeprived"), group_name = "WestonDeprived", save_plot = FALSE)
+#map outputs onto a dataframe using map2_dfr from purrr
 
+coef_output <- purrr::map2_dfr(
+  model_output,
+  seq_along(model_output),
+  ~{
+    
+    broom::tidy(
+      .x$model,
+      conf.int = TRUE,
+      exponentiate = TRUE
+    ) %>%
+      mutate(
+        age = model_specs$age[.y],
+        groups = paste(
+          model_specs$groups_to_include[[.y]],
+          collapse = " vs "
+        ),
+        event_date = model_specs$event_date[.y],
+        outbreaks = model_specs$outbreaks[.y],
+        dispersion = .x$dispersion,
+        model_family = .x$family_used,
+        formula = as.character(paste(deparse(formula(.x$model)), collapse = ""))
+      )
+    
+  }
+)
 
+#create results directory if it doesn't exist
+if (!dir.exists("./results")) {
+  dir.create("./results", recursive = TRUE)
+}
 
+#write results to directory 
+write.csv(
+  coef_output,
+  "./results/cits_model_coefficients.csv",
+  row.names = FALSE
+)
