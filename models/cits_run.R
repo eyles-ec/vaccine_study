@@ -169,7 +169,7 @@ fit_cits_model <- function(df,
     print(dispersion)
     
     #Switch to NB (or quasi) if needed
-    if (dispersion > 1.5 && robust_if_overdispersed) {
+    if (dispersion > 2 && robust_if_overdispersed) {
       warning(sprintf("Overdispersion detected (dispersion = %.2f). Switching to %s model.",
                       dispersion, fallback_family))
       
@@ -219,6 +219,7 @@ fit_cits_model <- function(df,
     data = df_filtered,
     model = model,
     dispersion = dispersion,
+    age_cohort = age,
     family_used = stats::family(model)$family
   )
 }
@@ -233,8 +234,11 @@ fit_cits_model <- function(df,
 generate_counterfactual <- function(df, model,
                                     outcome_type = c("count", "rate"),
                                     group_name  = "Somali",
-                                    outcome_var = "IncidencePct",
+                                    outcome_var = "Vaccinations",
+                                    age = "C1",
                                     time_var    = "time",
+                                    time_after_var = "time_after",
+                                    outbreak_var = "outbreak",
                                     group_var   = "group",
                                     period_var  = "period",
                                     level       = 0.95,
@@ -242,12 +246,21 @@ generate_counterfactual <- function(df, model,
                                     summary = TRUE) {
   
   #check arguments and columns since we are doing multiple outcomes/comparisons
-  needed_cols <- c(outcome_var, time_var, group_var, period_var)
+  needed_cols <- c(outcome_var, time_var, group_var)
+  
+  if (age == "C1"){
+    needed_cols <- c(needed_cols, period_var)
+  } else {
+    needed_cols <- c(needed_cols, outbreak_var)
+  }
+  
   missing_cols <- setdiff(needed_cols, names(df))
+  
   if (length(missing_cols) > 0) {
     stop("generate_counterfactual(): df is missing column(s): ",
          paste(missing_cols, collapse = ", "))
   }
+  
   outcome_type <- match.arg(outcome_type)
   
   #calculate constant for CIs 
@@ -266,9 +279,19 @@ generate_counterfactual <- function(df, model,
     dplyr::mutate(.row_id = dplyr::row_number())
   
   #Post-period rows for Somali/Weston Deprived/Etc 
-  post <- df2 |>
-    dplyr::filter(.data[[group_var]] == group_name,
-                  .data[[period_var]] == 1)
+  if (age == "C1") {
+    
+    post <- df2 |>
+      dplyr::filter(.data[[group_var]] == group_name,
+                    .data[[period_var]] == 1)
+    
+  } else {
+    
+    post <- df2 |>
+      dplyr::filter(.data[[group_var]] == group_name,
+                    .data[[outbreak_var]] == 1)
+    
+  }
   
   #output if there's no post rows (unlikely, but just in case)
   if (nrow(post) == 0) {
@@ -301,11 +324,24 @@ generate_counterfactual <- function(df, model,
   
   #collect field names
   group_token <- paste0(group_var, group_name)
-  col_level_diff <- paste0(group_token, ":", period_var)
-  col_slope_diff <- paste0(time_var, ":", group_token, ":", period_var)
   
-  #treated group's post differential
-  cols_to_zero <- c(col_level_diff, col_slope_diff)
+  if (age == "C1"){
+    
+    col_level_diff <- paste0(group_token, ":", period_var)
+    col_slope_diff <- paste0(group_token, ":", time_after_var)
+    
+    
+    #treated group's post differential
+    cols_to_zero <- c(col_level_diff, col_slope_diff)
+    
+  } else {
+    
+    col_outbreak_diff <- paste0(group_token, ":", outbreak_var)
+    
+    #treated group's outbreak differential
+    cols_to_zero <- col_outbreak_diff
+    
+  }
   
   #check for missing columns in case of error with names, throw error up
   missing_cols2 <- setdiff(cols_to_zero, colnames(X_cf))
@@ -322,7 +358,7 @@ generate_counterfactual <- function(df, model,
   X_cf[, cols_to_zero] <- 0
   
   #generate variance-covariance matrix using Newey West technique,
-  #which is more robust for autocorrelation present in data. (default for this is 4 weeks)
+  #which is more robust for autocorrelation present in data. (default for this is 3 months)
   #For some outcomes, AR1 prewhitening does not work, so we wrap it in a tryCatch, which allows
   #us to automatically fallback to not using prewhitening. 
   #define two simple functions
@@ -358,6 +394,13 @@ generate_counterfactual <- function(df, model,
   common <- intersect(colnames(X), names(beta_full))
   common <- intersect(common, rownames(V_full))
   
+  #error catch - no matching terms
+  if (length(common) == 0) {
+    stop(
+      "No common terms found between model matrix, coefficients and variance-covariance matrix."
+    )
+  }
+  
   #keep the common columns to ensure the matrices match 
   X    <- X[, common, drop = FALSE] #design matrix
   X_cf <- X_cf[, common, drop = FALSE] #counterfactual matrix
@@ -381,7 +424,7 @@ generate_counterfactual <- function(df, model,
   }
   
   y_obs      <- post[[outcome_var]] #extract observed counts
-  weeks_post <- nrow(post) #used for calculating annualised/weekly differences
+  months_post <- nrow(post) #used for calculating annualised/monthly differences
   
   #calculate totals for summary table 
   total_observed       <- sum(y_obs, na.rm = TRUE)
@@ -396,8 +439,8 @@ generate_counterfactual <- function(df, model,
   percent_increase   <- if (total_counterfactual > 0) 100 * total_difference / total_counterfactual else NA_real_
   pred_perc_increase <- if (total_counterfactual > 0) 100 * total_pred_diff / total_counterfactual else NA_real_
   
-  annualised_difference     <- if (weeks_post > 0) total_difference * 52 / weeks_post else NA_real_
-  average_weekly_difference <- if (weeks_post > 0) total_difference / weeks_post else NA_real_
+  annualised_difference     <- if (months_post > 0) total_difference * 12 / months_post else NA_real_
+  average_monthly_difference <- if (months_post > 0) total_difference / months_post else NA_real_
   
   #use delta method to calculate slopes with matrix crossproducts
   #for reference https://doi.org/10.1111/1475-6773.12122
@@ -425,7 +468,7 @@ generate_counterfactual <- function(df, model,
   g_pred_diff <- g_pred - g_cf
   se_total_pred_diff <- sqrt(drop(t(g_pred_diff) %*% V2 %*% g_pred_diff))
   
-  #the se of percent increase depends on the counterfactual, using similar if/else logic to the annualised/weekly
+  #the se of percent increase depends on the counterfactual, using similar if/else logic to the annualised/monthly
   if (is.finite(total_counterfactual) && total_counterfactual > 0) {
     g_percent_inc <- 100 * (-total_observed / (total_counterfactual^2)) * g_cf
     se_percent_inc <- sqrt(drop(t(g_percent_inc) %*% V2 %*% g_percent_inc))
@@ -439,8 +482,8 @@ generate_counterfactual <- function(df, model,
   }
   
   #logic as above, for se (avoids dividing by 0)
-  se_annualised_diff <- if (weeks_post > 0) se_total_diff * 52 / weeks_post else NA_real_
-  se_avg_weekly_diff <- if (weeks_post > 0) se_total_diff / weeks_post else NA_real_
+  se_annualised_diff <- if (months_post > 0) se_total_diff * 12 / months_post else NA_real_
+  se_avg_monthly_diff <- if (months_post > 0) se_total_diff / months_post else NA_real_
   
   #mini helper function to calculate cis for everything, with error catching for possible induced NAs above
   ci <- function(est, se, lower_bound = -Inf) {
@@ -457,20 +500,35 @@ generate_counterfactual <- function(df, model,
   ci_percent_inc  <- ci(percent_increase, se_percent_inc)
   ci_pred_percent <- ci(pred_perc_increase, se_pred_percent_inc)
   ci_annualised   <- ci(annualised_difference, se_annualised_diff)
-  ci_avg_weekly   <- ci(average_weekly_difference, se_avg_weekly_diff)
+  ci_avg_monthly   <- ci(average_monthly_difference, se_avg_monthly_diff)
   
-  #join per-week counterfactual back into the data using the row ids we made earlier
+  #join per-month counterfactual back into the data using the row ids we made earlier
   cf_tbl <- dplyr::tibble(.row_id = post$.row_id, cf = cf_post)
   
   #add cf back into the original data, makes it easier to plot 
-  out <- df2 |>
-    dplyr::left_join(cf_tbl, by = ".row_id") |>
-    dplyr::mutate(
-      cf = dplyr::if_else(.data[[group_var]] == group_name & .data[[period_var]] == 1, cf, NA_real_),
-      cf_diff = dplyr::if_else(.data[[group_var]] == group_name & .data[[period_var]] == 1,
-                               .data[[outcome_var]] - cf, NA_real_)
-    ) |>
-    dplyr::select(-.row_id)
+  
+  if (age == "C1"){
+    out <- df2 |>
+      dplyr::left_join(cf_tbl, by = ".row_id") |>
+      dplyr::mutate(
+        cf = dplyr::if_else(.data[[group_var]] == group_name & .data[[period_var]] == 1, cf, NA_real_),
+        cf_diff = dplyr::if_else(.data[[group_var]] == group_name & .data[[period_var]] == 1,
+                                 .data[[outcome_var]] - cf, NA_real_)
+      ) |>
+      dplyr::select(-.row_id)
+    
+  } else {
+    
+    out <- df2 |>
+      dplyr::left_join(cf_tbl, by = ".row_id") |>
+      dplyr::mutate(
+        cf = dplyr::if_else(.data[[group_var]] == group_name & .data[[outbreak_var]] == 1, cf, NA_real_),
+        cf_diff = dplyr::if_else(.data[[group_var]] == group_name & .data[[outbreak_var]] == 1,
+                                 .data[[outcome_var]] - cf, NA_real_)
+      ) |>
+      dplyr::select(-.row_id)
+    
+  }
   
   #also return a tidy summary table for reporting 
   summary_df <- dplyr::tibble(
@@ -493,17 +551,35 @@ generate_counterfactual <- function(df, model,
     pred_perc_increase = pred_perc_increase,
     pred_perc_increase_lower = ci_pred_percent[1],
     pred_perc_increase_upper = ci_pred_percent[2],
-    weeks_post = weeks_post,
+    months_post = months_post,
     annualised_difference = annualised_difference,
     annualised_difference_lower = ci_annualised[1],
     annualised_difference_upper = ci_annualised[2],
-    average_weekly_difference = average_weekly_difference,
-    average_weekly_difference_lower = ci_avg_weekly[1],
-    average_weekly_difference_upper = ci_avg_weekly[2],
+    average_monthly_difference = average_monthly_difference,
+    average_monthly_difference_lower = ci_avg_monthly[1],
+    average_monthly_difference_upper = ci_avg_monthly[2],
     vcov_used = vcov_used
   )
   
   #stick it all together in a list
+  
+  if (age == "C1") {
+    
+    cf_data <- out |>
+      dplyr::filter(.data[[group_var]] == group_name,       
+                    .data[[period_var]] == 1) |>
+      dplyr::select(dplyr::all_of(c(time_var, group_var, period_var)), cf)
+    
+  } else {
+    
+    cf_data <- out |>
+      dplyr::filter(.data[[group_var]] == group_name,
+                    .data[[outbreak_var]] == 1) |>
+      dplyr::select(dplyr::all_of(c(time_var, group_var, outbreak_var)), cf)
+    
+  }
+  
+  
   cf_data <- out |>
     dplyr::filter(.data[[group_var]] == group_name,
                   .data[[period_var]] == 1) |>
