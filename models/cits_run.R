@@ -7,6 +7,8 @@ library(dplyr)
 library(tidyr)
 library(stringr)
 library(purrr)
+library(marginaleffects)
+library(emmeans)
 
 
 #function to fit CITS models, adapted from 
@@ -225,374 +227,124 @@ fit_cits_model <- function(df,
 }
 
 
-#function to generate the counterfactual (if there was no intervention)
-#needs the dataframe and model from CITS function above
-#we generate this, then append it on the list output from the CITS function for the rest of the pipeline
-#also possible to look at the counterfactual summary with the summary option on (by default, or off (summary =FALSE))
-#because of autocorrelation we use Newey-West calculation for SE/CIs, nw_lag sets the lag for the calculation (in months)
+#function to calculate crude vaccine event rates (not vaccination rates, since we have incident counts)
+#goes by period, outbreak, or overall rates, depending on age group 
 
-generate_counterfactual <- function(df, model,
-                                    outcome_type = c("count", "rate"),
-                                    group_name  = "Somali",
-                                    outcome_var = "Vaccinations",
-                                    age = "C1",
-                                    time_var    = "time",
-                                    time_after_var = "time_after",
-                                    outbreak_var = "outbreak",
-                                    group_var   = "group",
-                                    period_var  = "period",
-                                    level       = 0.95,
-                                    nw_lag    = 3,
-                                    summary = TRUE) {
+calculate_crude_rates <- function(
+    df,
+    age,
+    groups_to_include,
+    stratify_by = c("period", "outbreak", "overall"),
+    outcome_var = "Vaccinations",
+    exposure_var = "Population",
+    age_var = "age_group",
+    group_var = "group",
+    multiplier = 1000
+) {
   
-  #check arguments and columns since we are doing multiple outcomes/comparisons
-  needed_cols <- c(outcome_var, time_var, group_var)
+  stratify_by <- match.arg(stratify_by)
   
-  if (age == "C1"){
-    needed_cols <- c(needed_cols, period_var)
-  } else {
-    needed_cols <- c(needed_cols, outbreak_var)
-  }
-  
-  missing_cols <- setdiff(needed_cols, names(df))
-  
-  if (length(missing_cols) > 0) {
-    stop("generate_counterfactual(): df is missing column(s): ",
-         paste(missing_cols, collapse = ", "))
-  }
-  
-  outcome_type <- match.arg(outcome_type)
-  
-  #calculate constant for CIs 
-  alpha <- 1 - level
-  z <- stats::qnorm(1 - alpha/2)
-  
-  #evaluate offset() terms on newdata (works for glm / glm.nb)
-  compute_offset <- function(model, newdata) {
-    mf  <- stats::model.frame(stats::terms(model), data = newdata, na.action = stats::na.pass)
-    off <- stats::model.offset(mf)
-    if (is.null(off)) rep(0, nrow(newdata)) else as.numeric(off)
-  }
-  
-  #Add row id to merge in counterfactuals later to the correct weeks
-  df2 <- df |>
-    dplyr::mutate(.row_id = dplyr::row_number())
-  
-  #Post-period rows for Somali/Weston Deprived/Etc 
-  if (age == "C1") {
+  if (stratify_by == "overall") {
     
-    post <- df2 |>
-      dplyr::filter(.data[[group_var]] == group_name,
-                    .data[[period_var]] == 1)
+    out<- df %>%
+      dplyr::group_by(group) %>%
+      dplyr::summarise(
+        events = sum(.data[[outcome_var]], na.rm = TRUE),
+        population = sum(.data[[exposure_var]], na.rm = TRUE),
+        crude_rate = events / population * multiplier,
+        .groups = "drop"
+      )
     
   } else {
     
-    post <- df2 |>
-      dplyr::filter(.data[[group_var]] == group_name,
-                    .data[[outbreak_var]] == 1)
+    out <- df %>%
+      dplyr::group_by(
+        group,
+        .data[[stratify_by]]
+      ) %>%
+      dplyr::summarise(
+        events = sum(.data[[outcome_var]], na.rm = TRUE),
+        population = sum(.data[[exposure_var]], na.rm = TRUE),
+        crude_rate = events / population * multiplier,
+        .groups = "drop"
+      )
     
   }
   
-  #output if there's no post rows (unlikely, but just in case)
-  if (nrow(post) == 0) {
-    out0 <- list(
-      data = df2 |> dplyr::select(-.row_id),
-      summary_table = dplyr::tibble(
-        weeks_post = 0L,
-        vcov_used = NA_character_
-      ),
-      cf_data = post
-    )
-    if (summary) dplyr::glimpse(out0$summary_table)
-    return(out0)
-  }
+  out
   
-  #Offsets (same exposure, same rows)
-  offset_vec <- compute_offset(model, post)
-  
-  #Model matrices (aligned with coefficients), in order to calculate counterfactuals
-  tt <- stats::delete.response(stats::terms(model)) #term names
-  X  <- stats::model.matrix(tt, post) #design matrix
-  
-  #Generate counterfactual matrix, e.g. 
-  #What would group of interest look like post-intervention if they followed the same post change
-  #as the other group + common effects, without the group specific trend
-  # Keep post-period rows, but remove the treated group's post differential:
-  # 1) group level change in post: group:period
-  # 2) group slope change in post: time:group:period
-  X_cf <- X
-  
-  #collect field names
-  group_token <- paste0(group_var, group_name)
-  
-  if (age == "C1"){
-    
-    col_level_diff <- paste0(group_token, ":", period_var)
-    col_slope_diff <- paste0(group_token, ":", time_after_var)
-    
-    
-    #treated group's post differential
-    cols_to_zero <- c(col_level_diff, col_slope_diff)
-    
-  } else {
-    
-    col_outbreak_diff <- paste0(group_token, ":", outbreak_var)
-    
-    #treated group's outbreak differential
-    cols_to_zero <- col_outbreak_diff
-    
-  }
-  
-  #check for missing columns in case of error with names, throw error up
-  missing_cols2 <- setdiff(cols_to_zero, colnames(X_cf))
-  if (length(missing_cols2) > 0) {
-    stop(
-      "Controlled counterfactual could not find these columns in model matrix:\n  ",
-      paste(missing_cols2, collapse = "\n  "),
-      "\n\nAvailable columns include:\n  ",
-      paste(colnames(X_cf), collapse = ", ")
-    )
-  }
-  
-  #remove group trend from counterfactual model matrix
-  X_cf[, cols_to_zero] <- 0
-  
-  #generate variance-covariance matrix using Newey West technique,
-  #which is more robust for autocorrelation present in data. (default for this is 3 months)
-  #For some outcomes, AR1 prewhitening does not work, so we wrap it in a tryCatch, which allows
-  #us to automatically fallback to not using prewhitening. 
-  #define two simple functions
-  vcov_try_1 <- function() {
-    sandwich::NeweyWest(model, lag = nw_lag, prewhite = TRUE, adjust = TRUE)
-    
-  } 
-  vcov_try_2 <- function() {
-    sandwich::NeweyWest(model, lag = nw_lag, prewhite = FALSE, adjust = TRUE)
-  }
-  
-  #calculate variance covariance matrix - > if prewhitening doesn't work, automatically move on
-  V_full <- tryCatch(vcov_try_1(), error = function(e1) {
-    message("NeweyWest (prewhite=TRUE) failed: ", conditionMessage(e1),
-            " -> Trying prewhite=FALSE")
-    tryCatch(vcov_try_2(), error = function(e2) {
-      stop("Both prewhite=TRUE and prewhite=FALSE NeweyWest() failed:\n",
-           conditionMessage(e2))
-    })
-  })
-  
-  #repeat to get labels (probably there's a better way to do this..), running the same quietly
-  vcov_used <- tryCatch({
-    invisible(vcov_try_1()); paste0("NW_lag_", nw_lag, "_prewhite_TRUE")
-  }, error = function(e1) {
-    paste0("NW_lag_", nw_lag, "_prewhite_FALSE")
-  })
-  
-  #collect model coefficients
-  beta_full <- stats::coef(model)
-  
-  #ensure all the columns match between the cf and the vcov matrix via intersect
-  common <- intersect(colnames(X), names(beta_full))
-  common <- intersect(common, rownames(V_full))
-  
-  #error catch - no matching terms
-  if (length(common) == 0) {
-    stop(
-      "No common terms found between model matrix, coefficients and variance-covariance matrix."
-    )
-  }
-  
-  #keep the common columns to ensure the matrices match 
-  X    <- X[, common, drop = FALSE] #design matrix
-  X_cf <- X_cf[, common, drop = FALSE] #counterfactual matrix
-  beta <- beta_full[common] #coefficients from model
-  V2   <- V_full[common, common, drop = FALSE] #variance-covariance matrix 
-  
-  #including the offset, calculate the mean and counterfacual mean
-  #exponentiated due to model output
-  #again, CF is what would group have looked like post-intervention if intervention hadn't happened,
-  #but the common post effect, monthly dummies, and baseline trends still happened (e.g. other group)
-  #offset_vec should be all 0s if it's a gaussian model so don't need to do anything fancy
-  eta_hat_post <- as.numeric(X %*% beta) + offset_vec
-  eta_cf_post  <- as.numeric(X_cf %*% beta) + offset_vec
-  
-  if (outcome_type == "count") {
-    yhat_post <- exp(eta_hat_post)
-    cf_post   <- exp(eta_cf_post)
-  } else {
-    yhat_post <- eta_hat_post
-    cf_post   <- eta_cf_post
-  }
-  
-  y_obs      <- post[[outcome_var]] #extract observed counts
-  months_post <- nrow(post) #used for calculating annualised/monthly differences
-  
-  #calculate totals for summary table 
-  total_observed       <- sum(y_obs, na.rm = TRUE)
-  total_counterfactual <- sum(cf_post, na.rm = TRUE)
-  total_difference     <- sum(y_obs - cf_post, na.rm = TRUE)
-  
-  total_predicted  <- sum(yhat_post, na.rm = TRUE)
-  total_pred_diff  <- total_predicted - total_counterfactual
-  
-  #calculate percent/annualised/weekly differences
-  #if/else structure avoids division by 0 and breaking the code
-  percent_increase   <- if (total_counterfactual > 0) 100 * total_difference / total_counterfactual else NA_real_
-  pred_perc_increase <- if (total_counterfactual > 0) 100 * total_pred_diff / total_counterfactual else NA_real_
-  
-  annualised_difference     <- if (months_post > 0) total_difference * 12 / months_post else NA_real_
-  average_monthly_difference <- if (months_post > 0) total_difference / months_post else NA_real_
-  
-  #use delta method to calculate slopes with matrix crossproducts
-  #for reference https://doi.org/10.1111/1475-6773.12122
-  
-  if (outcome_type == "count") {
-    #poisson/nb
-    g_cf   <- as.numeric(crossprod(X_cf, cf_post))  # d sum(cf) / d beta
-    g_pred <- as.numeric(crossprod(X, yhat_post))# d sum(pred) / d beta
-    
-  } else {
-    #gaussian/rate
-    g_cf   <- colSums(X_cf)
-    g_pred <- colSums(X)
-    
-  }
-  
-  #use the crossproducts to calculate standard errors 
-  se_total_cf   <- sqrt(drop(t(g_cf)   %*% V2 %*% g_cf))
-  se_total_pred <- sqrt(drop(t(g_pred) %*% V2 %*% g_pred))
-  
-  #observed total is non-random, so the se comes from modelled counterfactual
-  se_total_diff <- se_total_cf
-  
-  #predicted difference se (using matrix crossproducts)
-  g_pred_diff <- g_pred - g_cf
-  se_total_pred_diff <- sqrt(drop(t(g_pred_diff) %*% V2 %*% g_pred_diff))
-  
-  #the se of percent increase depends on the counterfactual, using similar if/else logic to the annualised/monthly
-  if (is.finite(total_counterfactual) && total_counterfactual > 0) {
-    g_percent_inc <- 100 * (-total_observed / (total_counterfactual^2)) * g_cf
-    se_percent_inc <- sqrt(drop(t(g_percent_inc) %*% V2 %*% g_percent_inc))
-    
-    g_pred_percent_inc <- 100 * ((1/total_counterfactual) * g_pred -
-                                   (total_predicted/(total_counterfactual^2)) * g_cf)
-    se_pred_percent_inc <- sqrt(drop(t(g_pred_percent_inc) %*% V2 %*% g_pred_percent_inc))
-  } else {
-    se_percent_inc <- NA_real_
-    se_pred_percent_inc <- NA_real_
-  }
-  
-  #logic as above, for se (avoids dividing by 0)
-  se_annualised_diff <- if (months_post > 0) se_total_diff * 12 / months_post else NA_real_
-  se_avg_monthly_diff <- if (months_post > 0) se_total_diff / months_post else NA_real_
-  
-  #mini helper function to calculate cis for everything, with error catching for possible induced NAs above
-  ci <- function(est, se, lower_bound = -Inf) {
-    if (!is.finite(est) || !is.finite(se)) return(c(NA_real_, NA_real_))
-    c(max(lower_bound, est - z * se), est + z * se)
-  }
-  
-  #generate cis for cf, differences, etc. 
-  ci_total_cf        <- ci(total_counterfactual, se_total_cf, lower_bound = 0)
-  ci_total_diff      <- ci(total_difference, se_total_diff)
-  ci_total_pred      <- ci(total_predicted, se_total_pred, lower_bound = 0)
-  ci_total_pred_diff <- ci(total_pred_diff, se_total_pred_diff)
-  
-  ci_percent_inc  <- ci(percent_increase, se_percent_inc)
-  ci_pred_percent <- ci(pred_perc_increase, se_pred_percent_inc)
-  ci_annualised   <- ci(annualised_difference, se_annualised_diff)
-  ci_avg_monthly   <- ci(average_monthly_difference, se_avg_monthly_diff)
-  
-  #join per-month counterfactual back into the data using the row ids we made earlier
-  cf_tbl <- dplyr::tibble(.row_id = post$.row_id, cf = cf_post)
-  
-  #add cf back into the original data, makes it easier to plot 
-  
-  if (age == "C1"){
-    out <- df2 |>
-      dplyr::left_join(cf_tbl, by = ".row_id") |>
-      dplyr::mutate(
-        cf = dplyr::if_else(.data[[group_var]] == group_name & .data[[period_var]] == 1, cf, NA_real_),
-        cf_diff = dplyr::if_else(.data[[group_var]] == group_name & .data[[period_var]] == 1,
-                                 .data[[outcome_var]] - cf, NA_real_)
-      ) |>
-      dplyr::select(-.row_id)
-    
-  } else {
-    
-    out <- df2 |>
-      dplyr::left_join(cf_tbl, by = ".row_id") |>
-      dplyr::mutate(
-        cf = dplyr::if_else(.data[[group_var]] == group_name & .data[[outbreak_var]] == 1, cf, NA_real_),
-        cf_diff = dplyr::if_else(.data[[group_var]] == group_name & .data[[outbreak_var]] == 1,
-                                 .data[[outcome_var]] - cf, NA_real_)
-      ) |>
-      dplyr::select(-.row_id)
-    
-  }
-  
-  #also return a tidy summary table for reporting 
-  summary_df <- dplyr::tibble(
-    total_observed = total_observed,
-    total_counterfactual = total_counterfactual,
-    total_counterfactual_lower = ci_total_cf[1],
-    total_counterfactual_upper = ci_total_cf[2],
-    total_difference = total_difference,
-    total_difference_lower = ci_total_diff[1],
-    total_difference_upper = ci_total_diff[2],
-    total_predicted = total_predicted,
-    total_predicted_lower = ci_total_pred[1],
-    total_predicted_upper = ci_total_pred[2],
-    total_pred_diff = total_pred_diff,
-    total_pred_diff_lower = ci_total_pred_diff[1],
-    total_pred_diff_upper = ci_total_pred_diff[2],
-    percent_increase = percent_increase,
-    percent_increase_lower = ci_percent_inc[1],
-    percent_increase_upper = ci_percent_inc[2],
-    pred_perc_increase = pred_perc_increase,
-    pred_perc_increase_lower = ci_pred_percent[1],
-    pred_perc_increase_upper = ci_pred_percent[2],
-    months_post = months_post,
-    annualised_difference = annualised_difference,
-    annualised_difference_lower = ci_annualised[1],
-    annualised_difference_upper = ci_annualised[2],
-    average_monthly_difference = average_monthly_difference,
-    average_monthly_difference_lower = ci_avg_monthly[1],
-    average_monthly_difference_upper = ci_avg_monthly[2],
-    vcov_used = vcov_used
-  )
-  
-  #stick it all together in a list
-  
-  if (age == "C1") {
-    
-    cf_data <- out |>
-      dplyr::filter(.data[[group_var]] == group_name,       
-                    .data[[period_var]] == 1) |>
-      dplyr::select(dplyr::all_of(c(time_var, group_var, period_var)), cf)
-    
-  } else {
-    
-    cf_data <- out |>
-      dplyr::filter(.data[[group_var]] == group_name,
-                    .data[[outbreak_var]] == 1) |>
-      dplyr::select(dplyr::all_of(c(time_var, group_var, outbreak_var)), cf)
-    
-  }
-  
-  
-  cf_data <- out |>
-    dplyr::filter(.data[[group_var]] == group_name,
-                  .data[[period_var]] == 1) |>
-    dplyr::select(dplyr::all_of(c(time_var, group_var, period_var)), cf)
-  
-  result <- list(data = out, summary_table = summary_df, cf_data = cf_data)
-  
-  #print an easy summary of the cf table if you want 
-  if (summary) dplyr::glimpse(result$summary_table)
-  
-  return(result)
 }
 
+#estimated marginal means
+#returns means, interactions, 
+#we do not set default arguments here as they are drawn from the model output being used in the function call in the main code
+
+generate_marginal_means <- function(
+    model,
+    age,
+    comparison,
+    response = TRUE
+) {
+  
+  if (age == "C1") {
+    
+    emm <- emmeans(
+      model,
+      ~ group | period,
+      type = "response"
+    )
+    
+    contrasts <- contrast(
+      emm,
+      method = "revpairwise"
+    )
+    
+    interaction_emm <- emmeans(
+      model,
+      ~ group * period,
+      type = "response"
+    )
+    
+    interaction_contrasts <- contrast(
+      interaction_emm,
+      interaction = "pairwise"
+    )
+    
+  } else {
+    
+    emm <- emmeans(
+      model,
+      ~ group | outbreak,
+      type = "response"
+    )
+    
+    contrasts <- contrast(
+      emm,
+      method = "revpairwise"
+    )
+    
+    interaction_emm <- emmeans(
+      model,
+      ~ group * outbreak,
+      type = "response"
+    )
+    
+    interaction_contrasts <- contrast(
+      interaction_emm,
+      interaction = "pairwise"
+    )
+    
+  }
+  
+  list(
+    emm = as.data.frame(emm),
+    contrasts = as.data.frame(summary(contrasts)),
+    interaction_contrasts = as.data.frame(summary(interaction_contrasts)),
+    age = age,
+    comparison = comparison
+  )
+  
+}
 
 #create a standardised CITS plot, including the counterfactual line for Bristol ACHC
 #can save the plot if desired with own filename, overwrite protection. you also can scale it
@@ -743,7 +495,7 @@ model_output <- pmap(
       event_date = event_date,
       outbreaks = outbreaks,
       outbreaks_dates = outbreak_dates,
-      robust_if_overdispersed = FALSE,
+      robust_if_overdispersed = TRUE,
       fallback_family = "neg_binomial",
       display = FALSE
     )
@@ -780,6 +532,138 @@ coef_output <- purrr::map2_dfr(
   }
 )
 
+#calculate crude rates
+#these are interpreted as for ex, 24 vaccination events per 1,000 children in the population during the study period
+#we can also calculate separately for before/after and outbreak/not as stratified 
+
+#over the entire study period
+crude_rates_overall <- purrr::map2_dfr(
+  model_output,
+  seq_along(model_output),
+  ~{
+    
+    calculate_crude_rates(
+      df = .x$data,
+      stratify_by = "overall"
+    ) %>%
+      dplyr::mutate(
+        comparison = paste(
+          model_specs$groups_to_include[[.y]],
+          collapse = " vs "
+        ),
+        age = model_specs$age[.y],
+        stratification = "Overall"
+      )
+    
+  }
+)
+
+crude_rates_stratified <- purrr::map2_dfr(
+  model_output,
+  seq_along(model_output),
+  ~{
+    
+    stratified_by <- if (
+      model_specs$age[.y] == "C1"
+    ) {
+      "period"
+    } else {
+      "outbreak"
+    }
+    
+    calculate_crude_rates(
+      df = .x$data,
+      stratify_by = stratified_by
+    ) %>%
+      dplyr::mutate(
+        comparison = paste(
+          model_specs$groups_to_include[[.y]],
+          collapse = " vs "
+        ),
+        age = model_specs$age[.y],
+        stratification = stratified_by
+      )
+    
+  }
+)
+
+crude_rates_all <- dplyr::bind_rows(
+  crude_rates_overall,
+  crude_rates_stratified
+) %>%
+  dplyr::relocate(
+    comparison,
+    age,
+    stratification
+  )
+
+#generate estimated marginal means, interaction contrasts, pairwise contrasts
+
+mm_output <- purrr::map2(
+  model_output,
+  seq_along(model_output),
+  ~ generate_marginal_means(
+    model = .x$model,
+    age = model_specs$age[.y],
+    comparison = paste(
+      model_specs$groups_to_include[[.y]],
+      collapse = " vs "
+    )
+  )
+)
+
+mm_means <- purrr::map_dfr(
+  mm_output,
+  ~{
+    .x$emm %>%
+      dplyr::mutate(
+        comparison = .x$comparison,
+        age = .x$age,
+        output_type = "Marginal Mean"
+      )
+  }
+) %>%
+  dplyr::relocate(
+    output_type,
+    comparison,
+    age
+  )
+
+
+mm_contrasts <- purrr::map_dfr(
+  mm_output,
+  ~{
+    .x$contrasts %>%
+      dplyr::mutate(
+        comparison = .x$comparison,
+        age = .x$age,
+        output_type = "Pairwise Contrast"
+      )
+  }
+) %>%
+  dplyr::relocate(
+    output_type,
+    comparison,
+    age
+  )
+
+mm_interactions <- purrr::map_dfr(
+  mm_output,
+  ~{
+    .x$interaction_contrasts %>%
+      dplyr::mutate(
+        comparison = .x$comparison,
+        age = .x$age,
+        output_type = "Interaction Contrast"
+      )
+  }
+) %>%
+  dplyr::relocate(
+    output_type,
+    comparison,
+    age
+  )
+
 #create results directory if it doesn't exist
 if (!dir.exists("./results")) {
   dir.create("./results", recursive = TRUE)
@@ -791,3 +675,27 @@ write.csv(
   "./results/cits_model_coefficients.csv",
   row.names = FALSE
 )
+
+write.csv(
+  crude_rates_all,
+  "./results/crude_event_rates.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  mm_means, 
+  "./results/mm_means.csv",
+  row.names = FALSE
+  )
+
+write.csv(
+  mm_contrasts,
+  "./results/mm_contrasts.csv",
+  row.names = FALSE
+  )
+
+write.csv(
+  mm_interactions, 
+  "./results/mm_interactions.csv",
+    row.names = FALSE
+  )
