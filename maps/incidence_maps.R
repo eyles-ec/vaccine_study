@@ -20,8 +20,7 @@ make_map <- function(data,
   ggplot(data) +
     geom_sf(
       aes(fill = .data[[var]]),
-      colour = "white",
-      size = 0.2
+      colour = NA
     ) +
     scale_fill_continuous(
       low = low_col,
@@ -68,7 +67,7 @@ make_map_row <- function(data,
   
   ggarrange(
     plotlist = map_list,
-    ncol = nrow(ethnicity_spec),
+    ncol = length(map_list),
     nrow = 1
   ) +
     labs(title = cohort_title) +
@@ -230,7 +229,7 @@ cohort_maps <- cohort_spec %>%
       low_col,
       high_col,
       max_value,
-      steps) {
+      step) {
       
       make_map_row(
         data = bnssg_localities,
