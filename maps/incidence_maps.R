@@ -17,6 +17,7 @@ make_map <- function(data,
                      high_col,
                      max_value,
                      step,
+                     na_colour = "grey30",
                      map_elements = FALSE) {
   
   p <- ggplot(data) +
@@ -30,7 +31,7 @@ make_map <- function(data,
       name = "Rate per 1,000",
       breaks = seq(from = 0, to = max_value, by = step),
       limits = c(0, max_value),
-      na.value = "grey90",
+      na.value = na_colour,
       guide = guide_colourbar(
         title.position = "left",
         title.hjust = 0.5,
@@ -60,7 +61,7 @@ make_map <- function(data,
       annotation_north_arrow(
         location = "tr",
         pad_x = unit(0.2, "cm"),
-        pad_y = unit(3, "cm"),
+        pad_y = unit(2.3, "cm"),
         width = unit(0.4, "cm"),
         height = unit(0.4, "cm"),
         which_north = "true",
@@ -82,12 +83,14 @@ make_map_row <- function(data,
                          high_col,
                          max_value,
                          step,
-                         ethnicity_spec) {
+                         ethnicity_spec 
+                         #na_colour
+                         ) {
   
   map_list <- ethnicity_spec %>%
     mutate(
       var = paste0("mean_incidence_", cohort, "_", ethnicity),
-      map_elements = row_number() == 1 #this means the map elements (north arrow/scale bar) will only be on the first map
+      map_elements = row_number() == 1 & cohort == "C1" #this means the map elements (north arrow/scale bar) will only be on the first map of C1
     ) %>%
     pmap(
       \(ethnicity, plot_title, var, map_elements) {
@@ -100,6 +103,7 @@ make_map_row <- function(data,
           high_col = high_col,
           max_value = max_value,
           step = step,
+          #na_colour = na_colour,
           map_elements = map_elements
         )
         
@@ -116,9 +120,9 @@ make_map_row <- function(data,
     labs(title = cohort_title) +
     theme(
       plot.title = element_text(
-        size = 11,
+        size = 10,
         face = "bold",
-        hjust = 0
+        hjust = 0.5
       )
     )
 }
@@ -241,22 +245,22 @@ cohort_spec <- tribble(
   
   "C1",
   "Between 12 and 47 months (routine)",
-  "#87CEFA",
-  "#00009C",
+  "#deebf7",
+  "#08519c",
   350,
   50,
   
   "C2",
   "Between 4 and 16 years (children catch-up)",
-  "#FFE4E1",
-  "#FE0000",
+  "#FFE5d9",
+  "#cb181d",
   10,
   2,
   
   "C3",
   "Between 17 and 34 years (adult catch-up)",
-  "#FFFDD0",
-  "#EF9B0F",
+  "#Fef0d9",
+  "#e69f00",
   2,
   0.5
 )
@@ -283,6 +287,7 @@ cohort_maps <- cohort_spec %>%
         max_value = max_value,
         step = step,
         ethnicity_spec = ethnicity_spec
+      
       )
       
     }
@@ -306,5 +311,5 @@ ggsave(
   width = 4000,
   height = 4000,
   units = "px",
-  dpi = 320
+  dpi = 600
 )
