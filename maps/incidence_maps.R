@@ -60,9 +60,11 @@ make_map <- function(data,
       annotation_north_arrow(
         location = "tr",
         pad_x = unit(0.2, "cm"),
-        pad_y = unit(2, "cm"),
+        pad_y = unit(3, "cm"),
+        width = unit(0.4, "cm"),
+        height = unit(0.4, "cm"),
         which_north = "true",
-        style = north_arrow_minimal
+        style = north_arrow_orienteering
       )
     
   }
@@ -85,8 +87,7 @@ make_map_row <- function(data,
   map_list <- ethnicity_spec %>%
     mutate(
       var = paste0("mean_incidence_", cohort, "_", ethnicity),
-      map_elements = row_number() == 1, #this means the map elements (north arrow/scale bar) will only be on the first map
-      #show_legend = TRUE
+      map_elements = row_number() == 1 #this means the map elements (north arrow/scale bar) will only be on the first map
     ) %>%
     pmap(
       \(ethnicity, plot_title, var, map_elements) {
@@ -100,7 +101,6 @@ make_map_row <- function(data,
           max_value = max_value,
           step = step,
           map_elements = map_elements
-         # show_legend = show_legend
         )
         
       }
@@ -264,7 +264,7 @@ cohort_spec <- tribble(
 #generate cohort maps using the spec
 #using pmap from purrr which conveniently loops over functions
 #feeding in over cohort_spec
-#no need for map element/show legend argument as they're created in the make_map_row wrapper function 
+#no need for map element as they're created in the make_map_row wrapper function 
 cohort_maps <- cohort_spec %>%
   pmap(
     \(cohort,
