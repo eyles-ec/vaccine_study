@@ -5,6 +5,7 @@ library(purrr)
 library(tibble)
 library(ggplot2)
 library(ggpubr)
+library(ggspatial)
 
 #function to make a single map, taking arguments for breaks etc
 #focused on incidence
@@ -15,23 +16,57 @@ make_map <- function(data,
                      low_col,
                      high_col,
                      max_value,
-                     step) {
+                     step,
+                     map_elements = FALSE
+                     #show_legend = TRUE
+                     ) {
   
-  ggplot(data) +
+  p<- ggplot(data) +
     geom_sf(
       aes(fill = .data[[var]]),
       colour = NA
+      #show.legend = show_legend
     ) +
-    scale_fill_continuous(
+    scale_fill_gradient(
       low = low_col,
       high = high_col,
-      name = "per 1,000",
+      name = "Rate per 1,000",
       breaks = seq(from = 0, to = max_value, by = step),
       limits = c(0, max_value),
       na.value = "grey90"
     ) +
     theme_void() +
+    theme(
+      legend.position = "bottom",
+      legend.direction = "horizontal",
+      
+      legend.key.width = unit(2, "cm"),
+      legend.key.height = unit(0.4, "cm"),
+      
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 8)
+    ) +
     labs(title = title)
+  
+  if(map_elements){
+    
+    p <- p +
+      annotation_scale(
+        location = "br",
+        width_hint = 0.20,
+        text_cex = 0.5
+      ) +
+      annotation_north_arrow(
+        location = "br",
+        which_north = "true",
+        pad_x = unit(0.4, "cm"),
+        pad_y = unit(1.3, "cm"),
+        height = unit(0.6, "cm"),
+        width = unit(0.6, "cm"),
+        style = north_arrow_minimal
+      )
+  }
+  return(p)
 }
 
 #function to go over the cohorts and ethnicites and make maps wtih make_map
@@ -47,10 +82,12 @@ make_map_row <- function(data,
   
   map_list <- ethnicity_spec %>%
     mutate(
-      var = paste0("mean_incidence_", cohort, "_", ethnicity)
+      var = paste0("mean_incidence_", cohort, "_", ethnicity),
+      map_elements = row_number() == 1, #this means the map elements (north arrow/scale bar) will only be on the first map
+      #show_legend = TRUE
     ) %>%
     pmap(
-      \(ethnicity, plot_title, var) {
+      \(ethnicity, plot_title, var, map_elements) {
         
         make_map(
           data = data,
@@ -59,7 +96,9 @@ make_map_row <- function(data,
           low_col = low_col,
           high_col = high_col,
           max_value = max_value,
-          step = step
+          step = step,
+          map_elements = map_elements
+         # show_legend = show_legend
         )
         
       }
@@ -68,7 +107,9 @@ make_map_row <- function(data,
   ggarrange(
     plotlist = map_list,
     ncol = length(map_list),
-    nrow = 1
+    nrow = 1,
+    common.legend = TRUE,
+    legend = "bottom"
   ) +
     labs(title = cohort_title) +
     theme(
@@ -221,7 +262,7 @@ cohort_spec <- tribble(
 #generate cohort maps using the spec
 #using pmap from purrr which conveniently loops over functions
 #feeding in over cohort_spec
-
+#no need for map element/show legend argument as they're created in the make_map_row wrapper function 
 cohort_maps <- cohort_spec %>%
   pmap(
     \(cohort,
