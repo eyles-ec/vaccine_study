@@ -17,15 +17,12 @@ make_map <- function(data,
                      high_col,
                      max_value,
                      step,
-                     map_elements = FALSE
-                     #show_legend = TRUE
-                     ) {
+                     map_elements = FALSE) {
   
-  p<- ggplot(data) +
+  p <- ggplot(data) +
     geom_sf(
       aes(fill = .data[[var]]),
       colour = NA
-      #show.legend = show_legend
     ) +
     scale_fill_gradient(
       low = low_col,
@@ -33,40 +30,45 @@ make_map <- function(data,
       name = "Rate per 1,000",
       breaks = seq(from = 0, to = max_value, by = step),
       limits = c(0, max_value),
-      na.value = "grey90"
-    ) +
+      na.value = "grey90",
+      guide = guide_colourbar(
+        title.position = "left",
+        title.hjust = 0.5,
+        barwidth = unit(12, "cm"),
+        barheight = unit(0.25, "cm")
+      )
+    )+
     theme_void() +
     theme(
-      legend.position = "bottom",
-      legend.direction = "horizontal",
-      
-      legend.key.width = unit(2, "cm"),
-      legend.key.height = unit(0.4, "cm"),
-      
-      legend.title = element_text(size = 10),
-      legend.text = element_text(size = 8)
+      plot.title = element_text(
+        size = 10,
+        face = "plain",
+        hjust = 0.5
+      ),
+      legend.title = element_text(size = 8),
+      legend.text = element_text(size = 7)
     ) +
     labs(title = title)
   
-  if(map_elements){
+  if (map_elements) {
     
     p <- p +
       annotation_scale(
         location = "br",
-        width_hint = 0.20,
-        text_cex = 0.5
+        width_hint = 0.3
       ) +
       annotation_north_arrow(
-        location = "br",
+        location = "tr",
+        pad_x = unit(0.2, "cm"),
+        pad_y = unit(2, "cm"),
         which_north = "true",
-        pad_x = unit(0.4, "cm"),
-        pad_y = unit(1.3, "cm"),
-        height = unit(0.6, "cm"),
-        width = unit(0.6, "cm"),
         style = north_arrow_minimal
       )
+    
   }
+  
   return(p)
+  
 }
 
 #function to go over the cohorts and ethnicites and make maps wtih make_map
@@ -114,7 +116,7 @@ make_map_row <- function(data,
     labs(title = cohort_title) +
     theme(
       plot.title = element_text(
-        size = 16,
+        size = 11,
         face = "bold",
         hjust = 0
       )
