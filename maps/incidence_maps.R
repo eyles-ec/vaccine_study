@@ -21,11 +21,18 @@ make_map <- function(data,
                      map_elements = FALSE) {
   
   #because some data have different distribution, may want a discrete scale
+  #first coerce colours out of a list into a vector just in case, since the way we define
+  #colours in the cohort_spec is in list form
+  
+  if (is.list(colours)) {
+    colours <- colours[[1]]
+  }
   
   fill_scale <- if (discrete_scale) {
     
-    #currently implemented with blues for C1
-    scale_fill_stepsn(
+      #will go along with discrete colours rather than a gradient 
+      #this means you can choose which colours for each step
+      scale_fill_stepsn(
       colours = colours,
       name = "Rate per 1,000",
       breaks = seq(0, max_value, step),
@@ -42,6 +49,7 @@ make_map <- function(data,
   } else {
     
     #what was implemented before with low/high colour 
+    #automatically fills in the steps
     scale_fill_gradient(
       low = colours[1],
       high = colours[2],
@@ -63,10 +71,9 @@ make_map <- function(data,
   p <- ggplot(data) +
     geom_sf(
       aes(fill = .data[[var]]),
-      colour = "grey20"
+      colour = "grey40"
     ) +
-    fill_scale
-    +
+    fill_scale   +
     theme_void() +
     theme(
       plot.title = element_text(
@@ -107,10 +114,10 @@ make_map <- function(data,
 make_map_row <- function(data,
                          cohort,
                          cohort_title,
-                         low_col,
-                         high_col,
+                         colours,  
                          max_value,
                          step,
+                         discrete_scale,
                          ethnicity_spec 
                          #na_colour
                          ) {
@@ -127,11 +134,11 @@ make_map_row <- function(data,
           data = data,
           var = var,
           title = plot_title,
-          low_col = low_col,
-          high_col = high_col,
+          colours = colours,
           max_value = max_value,
           step = step,
           #na_colour = na_colour,
+          discrete_scale = discrete_scale,
           map_elements = map_elements
         )
         
@@ -373,19 +380,19 @@ cohort_maps <- cohort_spec %>%
   pmap(
     \(cohort,
       cohort_title,
-      low_col,
-      high_col,
+      colours,
       max_value,
-      step) {
+      step,
+      discrete_scale) {
       
       make_map_row(
         data = bnssg_localities,
         cohort = cohort,
         cohort_title = cohort_title,
-        low_col = low_col,
-        high_col = high_col,
+        colours = colours,
         max_value = max_value,
         step = step,
+        discrete_scale = discrete_scale,
         ethnicity_spec = ethnicity_spec
       
       )
