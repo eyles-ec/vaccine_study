@@ -1,11 +1,11 @@
-library(sf)
-library(dplyr)
-library(readxl)
-library(purrr)
-library(tibble)
-library(ggplot2)
-library(ggpubr)
-library(ggspatial)
+library(sf) #spatial framework
+library(dplyr) #data manipulation
+library(readxl) #read in excel files 
+library(purrr) #pmap to run over functions
+library(tibble) #make tibbles
+library(ggplot2) #plot
+library(ggpubr) #map publication stuff
+library(ggspatial) #use ggplot framework with spatial
 
 #function to make a single map, taking arguments for breaks etc
 #focused on incidence
@@ -13,32 +13,60 @@ library(ggspatial)
 make_map <- function(data,
                      var,
                      title,
-                     low_col,
-                     high_col,
+                     colours,
                      max_value,
                      step,
-                     na_colour = "grey30",
+                     na_colour = "grey70",
+                     discrete_scale = FALSE,
                      map_elements = FALSE) {
   
-  p <- ggplot(data) +
-    geom_sf(
-      aes(fill = .data[[var]]),
-      colour = NA
-    ) +
-    scale_fill_gradient(
-      low = low_col,
-      high = high_col,
+  #because some data have different distribution, may want a discrete scale
+  
+  fill_scale <- if (discrete_scale) {
+    
+    #currently implemented with blues for C1
+    scale_fill_stepsn(
+      colours = colours,
       name = "Rate per 1,000",
-      breaks = seq(from = 0, to = max_value, by = step),
+      breaks = seq(0, max_value, step),
       limits = c(0, max_value),
       na.value = na_colour,
       guide = guide_colourbar(
-        title.position = "left",
+        title.position = "top",
         title.hjust = 0.5,
         barwidth = unit(12, "cm"),
         barheight = unit(0.25, "cm")
       )
-    )+
+    )
+    
+  } else {
+    
+    #what was implemented before with low/high colour 
+    scale_fill_gradient(
+      low = colours[1],
+      high = colours[2],
+      name = "Rate per 1,000",
+      breaks = seq(0, max_value, step),
+      limits = c(0, max_value),
+      na.value = na_colour,
+      guide = guide_colourbar(
+        title.position = "top",
+        title.hjust = 0.5,
+        barwidth = unit(12, "cm"),
+        barheight = unit(0.25, "cm")
+      )
+    )
+    
+  }
+  
+  
+  p <- ggplot(data) +
+    geom_sf(
+      aes(fill = .data[[var]]),
+      colour = "grey20"
+    ) +
+    fill_scale
+    +
     theme_void() +
     theme(
       plot.title = element_text(
@@ -144,7 +172,8 @@ bnssg_msoa <- msoa |>
 #cleanup
 rm(msoa)
 
-#locality look up thanks to Carlos
+#locality lookup, added missing areas to make locality map work
+#previous lookup was only where GPs existed 
 locality_lookup <- tribble(
   ~locality, ~MSOA21CD,
   "Inner City and East", "E02003039",
@@ -155,9 +184,28 @@ locality_lookup <- tribble(
   "Inner City and East", "E02003036",
   "Inner City and East", "E02006889",
   "Inner City and East", "E02003034",
+  "Inner City and East", "E02003023",
+  "Inner City and East", "E02003025",
+  "Inner City and East", "E02003027",
+  "Inner City and East", "E02003028",
+  "Inner City and East", "E02003029",
+  "Inner City and East", "E02003030",
+  "Inner City and East", "E02003031",
+  "Inner City and East", "E02003032",
+  "Inner City and East", "E02003038",
+  "Inner City and East", "E02003040",
+  "Inner City and East", "E02003044",
+  "Inner City and East", "E02003045",
+  "Inner City and East", "E02006887",
+  "Inner City and East", "E02006949",
+  "Inner City and East", "E02006950",
+  "Inner City and East", "E02006951",
+  "Inner City and East", "E02006952",
   
   "North and West Bristol", "E02003022",
   "North and West Bristol", "E02003021",
+  "North and West Bristol", "E02003026",
+  "North and West Bristol", "E02003015",
   "North and West Bristol", "E02003013",
   "North and West Bristol", "E02003016",
   "North and West Bristol", "E02003041",
@@ -166,16 +214,31 @@ locality_lookup <- tribble(
   "North and West Bristol", "E02003033",
   "North and West Bristol", "E02003017",
   "North and West Bristol", "E02003037",
-  
+  "North and West Bristol", "E02003018",
+  "North and West Bristol", "E02003014",
+  "North and West Bristol", "E02003026",
+  "North and West Bristol", "E02003020",
+
   "South Bristol", "E02003063",
+  "South Bristol", "E02003062",
   "South Bristol", "E02003050",
+  "South Bristol", "E02003051",
+  "South Bristol", "E02003052",
+  "South Bristol", "E02003053",
   "South Bristol", "E02003046",
+  "South Bristol", "E02003047",
+  "South Bristol", "E02003048",
+  "South Bristol", "E02003049",
   "South Bristol", "E02003056",
+  "South Bristol", "E02003055",
+  "South Bristol", "E02003054",
   "South Bristol", "E02003059",
   "South Bristol", "E02003064",
   "South Bristol", "E02003057",
+  "South Bristol", "E02003058",
   "South Bristol", "E02003053",
   "South Bristol", "E02003060",
+  "South Bristol", "E02003061",
   
   "South Gloucestershire", "E02003119",
   "South Gloucestershire", "E02003104",
@@ -183,32 +246,63 @@ locality_lookup <- tribble(
   "South Gloucestershire", "E02003095",
   "South Gloucestershire", "E02003111",
   "South Gloucestershire", "E02003110",
-  "South Gloucestershire", "E02003105",
   "South Gloucestershire", "E02003094",
   "South Gloucestershire", "E02003120",
   "South Gloucestershire", "E02003116",
   "South Gloucestershire", "E02003112",
-  "South Gloucestershire", "E02003015",
   "South Gloucestershire", "E02003117",
-  "South Gloucestershire", "E02003018",
   "South Gloucestershire", "E02003090",
   "South Gloucestershire", "E02003091",
   "South Gloucestershire", "E02003113",
   "South Gloucestershire", "E02003096",
+  "South Gloucestershire", "E02003092",
+  "South Gloucestershire", "E02003093",
+  "South Gloucestershire", "E02003097",
+  "South Gloucestershire", "E02003098",
+  "South Gloucestershire", "E02003099",
+  "South Gloucestershire", "E02003101",
+  "South Gloucestershire", "E02003102",
+  "South Gloucestershire", "E02003103",
+  "South Gloucestershire", "E02003107",
+  "South Gloucestershire", "E02003108",
+  "South Gloucestershire", "E02003109",
+  "South Gloucestershire", "E02003114",
+  "South Gloucestershire", "E02003115",
+  "South Gloucestershire", "E02003118",
+  "South Gloucestershire", "E02003121",
+  "South Gloucestershire", "E02007064",
+  "South Gloucestershire", "E02007065",
+  "South Gloucestershire", "E02007066",
+  "South Gloucestershire", "E02007067",
+  "South Gloucestershire", "E02003105",
   
   "Weston, Worle and Villages", "E02003080",
   "Weston, Worle and Villages", "E02003084",
   "Weston, Worle and Villages", "E02003085",
   "Weston, Worle and Villages", "E02006845",
+  "Weston, Worle and Villages", "E02006846",
   "Weston, Worle and Villages", "E02003081",
   "Weston, Worle and Villages", "E02003086",
-  "Weston, Worle and Villages", "E02003088",
+  "Weston, Worle and Villages", "E02003088", #this MSOA also covers part of Woodspring
+  "Weston, Worle and Villages", "E02003089",
+  "Weston, Worle and Villages", "E02003087",
+  "Weston, Worle and Villages", "E02003078", #this MSOA also covers part of Woodspring
+  "Weston, Worle and Villages", "E02003079",
+  "Weston, Worle and Villages", "E02003082",
   
   "Woodspring", "E02003069",
   "Woodspring", "E02003067",
   "Woodspring", "E02003068",
   "Woodspring", "E02003065",
-  "Woodspring", "E02003072"
+  "Woodspring", "E02003072",
+  "Woodspring", "E02003066",
+  "Woodspring", "E02003070",
+  "Woodspring", "E02003071",
+  "Woodspring", "E02003073",
+  "Woodspring", "E02003074",
+  "Woodspring", "E02003075",
+  "Woodspring", "E02003076",
+  "Woodspring", "E02003077"
 )
 
 #join locality lookup to MSOAs
@@ -241,28 +335,34 @@ ethnicity_spec <- tribble(
 
 #cohort specification includes colour for colour ramp, low/high colours and breaks
 cohort_spec <- tribble(
-  ~cohort, ~cohort_title, ~low_col,   ~high_col, ~max_value, ~step,
+  ~cohort, ~cohort_title, ~colours, ~max_value, ~step, ~discrete_scale,
   
   "C1",
   "Between 12 and 47 months (routine)",
-  "#deebf7",
-  "#08519c",
+  list(c("#deebf7",
+    "#9ecae1",
+    "#6baed6",
+    "#3182bd",
+    "#08519c")),
   350,
-  50,
+  25,
+  TRUE,
   
   "C2",
   "Between 4 and 16 years (children catch-up)",
-  "#FFE5d9",
-  "#cb181d",
+  list(c("#FFE5d9",
+    "#cb181d")),
   10,
   2,
+  FALSE,
   
   "C3",
   "Between 17 and 34 years (adult catch-up)",
-  "#Fef0d9",
-  "#e69f00",
+  list(c("#Fef0d9",
+  "#e69f00")),
   2,
-  0.5
+  0.5,
+  FALSE
 )
 
 #generate cohort maps using the spec
