@@ -346,6 +346,8 @@ generate_marginal_means <- function(
   
 }
 
+
+
 #create a standardised CITS plot, including the counterfactual line for Bristol ACHC
 #can save the plot if desired with own filename, overwrite protection. you also can scale it
 #height and width are in inches by default 
@@ -406,6 +408,139 @@ plot_cits <- function(cits_model,
   return(p)
 }
 
+#generate counterfactual function simplified from the one in the Common Ambition repo
+#a sort of more flexible implementation, uses delta method for 95% ci on attributable vaccines
+#this won't work with the rate/linear models but we chose not to go with these. 
+generate_counterfactual <- function(model,
+                                    data,
+                                    rows,
+                                    remove_terms,
+                                    level = 0.95) {
+  
+  alpha <- 1 - level
+  z <- qnorm(1 - alpha/2)
+  
+  #Model terms and matrices
+  tt <- delete.response(terms(model))
+  
+  X <- model.matrix(tt, data[rows, , drop = FALSE])
+  
+  X_cf <- X
+  
+  #Check requested terms exist
+  #test in case the Cf function doesn't work
+  missing_terms <- setdiff(remove_terms, colnames(X_cf))
+  
+  if (length(missing_terms) > 0) {
+    stop(
+      "Could not find model term(s): ",
+      paste(missing_terms, collapse = ", "),
+      "\n\nAvailable columns:\n",
+      paste(colnames(X_cf), collapse = ", ")
+    )
+  }
+  
+  # Zero intervention terms for counterfactual
+  X_cf[, remove_terms] <- 0
+  
+  # Coefficients and VCOV
+  beta <- coef(model)
+  V <- vcov(model)
+  
+  # Ensure matrices align
+  common <- intersect(colnames(X), names(beta))
+  common <- intersect(common, rownames(V))
+  
+  X <- X[, common, drop = FALSE]
+  X_cf <- X_cf[, common, drop = FALSE]
+  
+  beta <- beta[common]
+  V <- V[common, common, drop = FALSE]
+  
+  #population offset
+  mf <- model.frame(tt, data[rows, , drop = FALSE])
+  
+  offset_vec <- model.offset(mf)
+  
+  if (is.null(offset_vec)) {
+    offset_vec <- rep(0, nrow(X))
+  }
+  
+  #gather the linear predictors
+  eta_pred <- as.numeric(X %*% beta) + offset_vec
+  eta_cf <- as.numeric(X_cf %*% beta) + offset_vec
+  
+  #Response scale predictions
+  pred <- exp(eta_pred)
+  cf <- exp(eta_cf)
+  
+  #get our totals
+  total_predicted <- sum(pred, na.rm = TRUE)
+  total_counterfactual <- sum(cf, na.rm = TRUE)
+  
+  total_attributable <- total_predicted - total_counterfactual
+  
+  #Delta-method SEs
+  #refer to common ambition CF function for detailed explanation 
+  #for reference https://doi.org/10.1111/1475-6773.12122
+  g_pred <- as.numeric(crossprod(X, pred))
+  g_cf <- as.numeric(crossprod(X_cf, cf))
+  
+  g_diff <- g_pred - g_cf
+  
+  se_total_predicted <- sqrt(
+    drop(t(g_pred) %*% V %*% g_pred)
+  )
+  
+  se_total_cf <- sqrt(
+    drop(t(g_cf) %*% V %*% g_cf)
+  )
+  
+  se_total_attributable <- sqrt(
+    drop(t(g_diff) %*% V %*% g_diff)
+  )
+  
+  #Confidence intervals
+  ci_predicted <- c(
+    total_predicted - z * se_total_predicted,
+    total_predicted + z * se_total_predicted
+  )
+  
+  ci_cf <- c(
+    total_counterfactual - z * se_total_cf,
+    total_counterfactual + z * se_total_cf
+  )
+  
+  ci_attributable <- c(
+    total_attributable - z * se_total_attributable,
+    total_attributable + z * se_total_attributable
+  )
+  
+  #output to the row level so you can plot it, fiy ou like 
+  output_data <- data[rows, , drop = FALSE]
+  
+  output_data$predicted <- pred
+  output_data$counterfactual <- cf
+  output_data$attributable <- pred - cf
+  
+  list(
+    data = output_data,
+    
+    total_predicted = total_predicted,
+    total_predicted_lower = ci_predicted[1],
+    total_predicted_upper = ci_predicted[2],
+    
+    total_counterfactual = total_counterfactual,
+    total_counterfactual_lower = ci_cf[1],
+    total_counterfactual_upper = ci_cf[2],
+    
+    total_attributable = total_attributable,
+    total_attributable_lower = ci_attributable[1],
+    total_attributable_upper = ci_attributable[2],
+    
+    se_attributable = se_total_attributable
+  )
+}
 
 #get working directory from paths.R
 setwd(wd)
@@ -664,6 +799,78 @@ mm_interactions <- purrr::map_dfr(
     age
   )
 
+
+cf_output <- purrr::pmap(
+  list(
+    fit = model_output,
+    age = model_specs$age,
+    groups = model_specs$groups_to_include
+  ),
+  function(fit, age, groups) {
+    
+    treated_group <- groups[1]
+    
+    remove_terms <- dplyr::case_when(
+      
+      age == "C1" &
+        treated_group == "Somali" ~ list(c(
+          "groupSomali:period",
+          "groupSomali:time_post"
+        )),
+      
+      age == "C1" &
+        treated_group == "WestonDeprived" ~ list(c(
+          "groupWestonDeprived:period",
+          "groupWestonDeprived:time_post"
+        )),
+      
+      treated_group == "Somali" ~ list(c(
+        "outbreak",
+        "groupSomali:outbreak"
+      )),
+      
+      treated_group == "WestonDeprived" ~ list(c(
+        "outbreak",
+        "groupWestonDeprived:outbreak"
+      ))
+    )
+    
+    generate_counterfactual(
+      model = fit$model,
+      data = fit$data,
+      
+      rows =
+        if (age == "C1") {
+          fit$data$group == treated_group &
+            fit$data$period == 1
+        } else {
+          fit$data$group == treated_group &
+            fit$data$outbreak == 1
+        },
+      
+      remove_terms = remove_terms[[1]]
+    )
+    
+  }
+)
+
+cf_summary <- purrr::map2_dfr(
+  cf_output,
+  seq_along(cf_output),
+  ~ tibble::tibble(
+    age = model_specs$age[.y],
+    comparison = paste(
+      model_specs$groups_to_include[[.y]],
+      collapse = " vs "
+    ),
+    total_counterfactual = .x$total_counterfactual,
+    total_predicted = .x$total_predicted,
+    total_attributable = .x$total_attributable,
+    lower_ci = .x$total_attributable_lower,
+    upper_ci = .x$total_attributable_upper
+  )
+)
+
 #create results directory if it doesn't exist
 if (!dir.exists("./results")) {
   dir.create("./results", recursive = TRUE)
@@ -699,3 +906,11 @@ write.csv(
   "./results/mm_interactions.csv",
     row.names = FALSE
   )
+
+write.csv(
+  cf_summary, 
+  "./results/cf_summary.csv",
+  row.names = FALSE
+)
+
+
